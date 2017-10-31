@@ -2376,7 +2376,7 @@ def plotzonmean(zonMean, lat, timeVec,
                     cMap = 'RdBu'
                 else:
                     cMap = 'Blues'
-            if ~(varUnits is None):
+            if varUnits is not None:
                 if varUnits.lower() == 'm/s':
                     zonMean = zonMean*8.64*10**7
                     varUnits = 'mm/d'

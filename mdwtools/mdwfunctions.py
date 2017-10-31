@@ -1038,7 +1038,7 @@ def calcprectda(ds):
     return prectDa
 
 
-def calcdsregmean(da,
+def calcdaregmean(da,
                   gwDa=None,
                   landFracDa=None,
                   latLim=np.array([-90, 90]),
@@ -1048,7 +1048,7 @@ def calcdsregmean(da,
                   stdUnits_flag=True,
                   ):
     """
-    Compute regional mean for a given dataset/version
+    Compute regional mean for a given dataarray
 
     Version Date:
         2017-10-25
@@ -1158,14 +1158,144 @@ def calcdsregmean(da,
         sumAreaWeights = areaWeightsGrid.sum(dim=('lon', 'lat'))
 
         # Compute regional mean
-        regMeanDs = regWDa/sumAreaWeights.values
+        regMeanDa = regWDa/sumAreaWeights.values
 
         # Add units back to regMeanDs
-        regMeanDs.attrs['units'] = da.units
-        regMeanDs.attrs['long_name'] = da.long_name
-        regMeanDs = regMeanDs.rename(da.name)
+        regMeanDa.attrs['units'] = da.units
+        regMeanDa.attrs['long_name'] = da.long_name
+        regMeanDa = regMeanDa.rename(da.name)
 
-    return regMeanDs
+    return regMeanDa
+
+
+def calcdaregzonmean(da,
+                     gwDa=None,
+                     landFracDa=None,
+                     latLim=np.array([-90, 90]),
+                     lonLim=np.array([0, 360]),
+                     ocnOnly_flag=False,
+                     qc_flag=False,
+                     stdUnits_flag=True,
+                     ):
+    """
+    Compute regional, zonal mean for a given dataarray
+
+    Version Date:
+        2017-10-31
+
+    Args:
+        da - data array for which regional zonal mean is to be computed
+
+    Kwargs:
+        gwDs - gaussian weights data array (for CESM output) for weighting by
+            latitude
+        landFracDs - land fraction dataset for selecting only ocean points
+            defined as landFrac == 0
+        latLim - np array of latitude limits
+        lonLim - np array of longitude limits
+        ocnOnly_flag - True to use landFracDs to omit all land points from
+            regional mean computation
+        qc_flag - True to make extra plots for quality control purposes
+        stdUnits_flag - True to convert to standard units before taking
+            regional mean
+    """
+
+    # Convert ds to standard units
+    if stdUnits_flag:
+        (da.values,
+         da.attrs['units']) = convertunit(
+            da.values,
+            da.units,
+            getstandardunits(da.name)
+            )
+
+    # Ensure latitude limits and latitudes in same direction
+    if any([(da.lat[0] > da.lat[1]) and (latLim[0] < latLim[1]),
+            (da.lat[0] < da.lat[1]) and (latLim[0] > latLim[1])]):
+        latLim = latLim[::-1]
+        print('flipping latLim')
+
+    # Filter to ocean only if requested
+    if ocnOnly_flag:
+        # Create ocean filter as True wherever the is no land
+        ocnFilt = (landFracDa.values == 0)
+        # Set values in ds to nan wherever there is some land
+        da.values[~ocnFilt] = np.nan
+
+    # Pull area weights
+    if gwDa is not None:
+        areaWeights = gwDa.loc[dict(lat=slice(latLim[0], latLim[-1]))]
+        if areaWeights.shape[-1] == 0:
+            raise ValueError('Invalide latitude limits')
+
+        # Pull data for region of interest
+        regDa = da.loc[dict(lat=slice(latLim[0], latLim[-1]),
+                            lon=slice(lonLim[0], lonLim[1]))]
+
+        # Plot data to ensure right region selected
+        if qc_flag:
+            plt.figure()
+            plt.contourf(regDa.lon, regDa.lat, regDa[0, :, :])
+            plt.colorbar()
+            plt.title('Subset data')
+
+        # Compute sum of weighted data
+        regWDa = regDa * areaWeights
+        regWDa = regWDa.sum(dim=('lon'))
+
+        # Create array for grid weights as grid (add dummy dim to do 3D x 2D)
+        areaWeightsGrid = xr.full_like(regDa, 1)*areaWeights
+
+        # Retrieve weights only wherever nan is not found in regDs
+        areaWeightsGrid = areaWeightsGrid.where(~np.isnan(regDa.values))
+
+        if qc_flag:
+            plt.figure()
+            plt.contourf(regDa.lon, regDa.lat, np.isnan(regDa.values)[0, :, :])
+            plt.figure()
+            plt.contourf(regDa.lon, regDa.lat, areaWeightsGrid[0, :, :])
+            plt.colorbar()
+            plt.title('Area Weights')
+
+        # Sum area weights over region
+        sumAreaWeights = areaWeightsGrid.sum(dim=('lon'))
+
+        # Compute regional mean
+        regMeanDa = regWDa/sumAreaWeights
+
+        # Add units back to regMeanDs
+        regMeanDa.attrs['units'] = da.units
+        regMeanDa.attrs['long_name'] = da.long_name
+        regMeanDa = regMeanDa.rename(da.name)
+    else:
+        # Pull data for region of interest
+        regDa = da.loc[dict(lat=slice(latLim[0], latLim[-1]),
+                            lon=slice(lonLim[0], lonLim[1]))]
+
+        # Create areaWeights as function of latitude
+        areaWeights = np.cos(np.deg2rad(regDa.lat))
+
+        # Compute sum of weighted data (xarray defaults to nansum)
+        regWDa = regDa * areaWeights
+        regWDa = regWDa.sum(dim=('lon'))
+
+        # Create array for grid weights as grid
+        areaWeightsGrid = xr.full_like(regDa, 1)*areaWeights
+        # Retreive weights only where regDa is not nan
+        # areaWeightsGrid.values[np.isnan(regDa.values)] = np.nan
+        areaWeightsGrid = areaWeightsGrid.where(~np.isnan(regDa.values))
+        # Sum area weights over region
+        sumAreaWeights = areaWeightsGrid.sum(dim=('lon'))
+
+        # Compute regional mean
+        regMeanDa = regWDa/sumAreaWeights.values
+
+        # Add units back to regMeanDs
+        regMeanDa.attrs['units'] = da.units
+        regMeanDa.attrs['long_name'] = da.long_name
+        regMeanDa = regMeanDa.rename(da.name)
+
+    return regMeanDa
 
 
 def calcdsctindex(ds,

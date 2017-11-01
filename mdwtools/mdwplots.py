@@ -1041,7 +1041,7 @@ def getlatlimstring(latLim,
 def getlonlimstring(lonLim,
                     joinStr='-',
                     join_flag=True,
-                    lonFormat='E',
+                    lonFormat='EW',
                     ):
     """
     Get string for latitude limits
@@ -1060,8 +1060,8 @@ def getlonlimstring(lonLim,
                      for x in range(len(lonLim))]
     elif lonFormat == 'E':
         lonLimStr = ['{:2.0f}'.format(np.abs(lonLim[x])) +
-                     'W'*(lonLim[x] < 0) +
-                     'E'*(lonLim[x] > 0)
+                     'W'*int(lonLim[x] < 0) +
+                     'E'*int(lonLim[x] > 0)
                      for x in range(len(lonLim))]
 
     if join_flag:
@@ -2309,8 +2309,11 @@ def plotzonmean(zonMean, lat, timeVec,
                 sym_flag=False,
                 tickDir='out',
                 timeLim=None,
+                timeUnits='mon',
                 varName=None,
                 varUnits=None,
+                xticks=None,
+                xtickLabels=None,
                 yTickLabelFreq=2
                 ):
     """
@@ -2342,10 +2345,12 @@ def plotzonmean(zonMean, lat, timeVec,
         timeLim - time limits for plot area
         varName - name of variable being plotted
         varUnits - units of variable being plotted
-        yTickLabelFreq - Factor by which to reduce # of y ticks (2 = every other)
+        yTickLabelFreq - Factor by which to reduce # of y ticks
+            (2 = every other)
 
     Returns:
         cset1.levels() - values for contour levels
+        cset1 - contour object
 
     Raises:
         none
@@ -2371,21 +2376,11 @@ def plotzonmean(zonMean, lat, timeVec,
 
     else:
         if varName.lower() == 'prect':
-            if cMap is None:
-                if sym_flag:
-                    cMap = 'RdBu'
-                else:
-                    cMap = 'Blues'
             if varUnits is not None:
                 if varUnits.lower() == 'm/s':
                     zonMean = zonMean*8.64*10**7
                     varUnits = 'mm/d'
-        elif varName.lower() == 'ts':
-            if cMap is None:
-                if sym_flag:
-                    cMap = 'RdBu_r'
-                else:
-                    cMap = 'Reds'
+
         # Set contour values
         if conts is None:
             conts = regularconts(zonMean,
@@ -2395,10 +2390,8 @@ def plotzonmean(zonMean, lat, timeVec,
 
         # Set colormap
         if cMap is None:
-            if sym_flag:
-                cMap = 'RdBu_r'
-            else:
-                cMap = 'Greys'
+            cMap = getcmap(varName,
+                           diff_flag=sym_flag)
 
         # Plot filled contours
         cset1 = plt.contourf(timeVec, yVec, zonMean.transpose(),
@@ -2438,7 +2431,12 @@ def plotzonmean(zonMean, lat, timeVec,
     ax = plt.gca()
     if ~(timeLim is None):
         plt.xlim(timeLim)
-    plt.xlabel('Time (d)')
+    if xticks is not None:
+        if xtickLabels is not None:
+            plt.xticks(xticks, xtickLabels)
+        else:
+            plt.xticks(xticks)
+    plt.xlabel('Time ({:s})'.format(timeUnits))
     ax.tick_params(axis='x', direction=tickDir)
 
     # Format y axis
@@ -2447,15 +2445,12 @@ def plotzonmean(zonMean, lat, timeVec,
     else:
         plt.ylim(np.sin(latLim*pi/180.))
     ha.set_yticks((np.sin(yTicks.astype(float)*pi/180.)))
-    # print(yTicks)
-    # print(yTickLabelFreq)
     ha.set_yticklabels([str(yTicks[j])
                         if j/float(yTickLabelFreq) == j/int(yTickLabelFreq)
                         else ''
                         for j in range(len(yTicks))])
     plt.ylabel('Latitude')
     ax.tick_params(axis='y', direction=tickDir)
-    # rcParams['ytick.direction'] = tickDir
 
     # Add grid lines for readability
     if grid_flag:

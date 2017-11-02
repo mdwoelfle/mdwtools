@@ -2404,7 +2404,7 @@ def plotzonmean(zonMean, lat, timeVec,
             plt.contour(timeVec, yVec, zonMean.transpose(),
                         levels=compcont,
                         colors='k',
-                        hold='on'
+                        # hold='on'
                         )
 
     # Add colorbar to figure

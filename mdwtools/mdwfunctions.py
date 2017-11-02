@@ -1131,12 +1131,12 @@ def calcdaregmean(da,
         sumAreaWeights = areaWeightsGrid.sum(dim=('lon', 'lat'))
 
         # Compute regional mean
-        regMeanDs = regWDa/sumAreaWeights
+        regMeanDa = regWDa/sumAreaWeights
 
         # Add units back to regMeanDs
-        regMeanDs.attrs['units'] = da.units
-        regMeanDs.attrs['long_name'] = da.long_name
-        regMeanDs = regMeanDs.rename(da.name)
+        regMeanDa.attrs['units'] = da.units
+        regMeanDa.attrs['long_name'] = da.long_name
+        regMeanDa = regMeanDa.rename(da.name)
     else:
         # Pull data for region of interest
         regDa = da.loc[dict(lat=slice(latLim[0], latLim[-1]),

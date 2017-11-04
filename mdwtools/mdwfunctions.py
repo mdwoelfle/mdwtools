@@ -2142,6 +2142,7 @@ def getstandardunits(varName):
                     'precip': 'mm/d',
                     'PS': 'hPa',
                     'SHFLX': 'W/m2',
+                    'sp': 'hPa',
                     'sst': 'K',
                     'TAUX': 'N/m2',
                     'TAUY': 'N/m2',
@@ -2490,36 +2491,103 @@ def loadcore(loadVars,
     return (core, coreDim)
 
 
-def loaderai(loadVars,
-             yr1,
-             newlat=None,
-             newlon=None,
+def loaderai(daNewGrid=None,
+             kind='linear',
+             loadClimo_flag=False,
+             newGridFile=None,
+             newGridName=None,
+             newLat=None,
+             newLon=None,
+             qc_flag=False,
              regrid_flag=False,
-             tMax=None):
+             whichErai='monmean',
+             ):
     """
-    Load ERAI data from text file
+    Load ERAI data from netcdf file
 
     Author:
         Matthew Woelfle (mdwoelfle@gmail.com)
 
     Version Date:
-        2017-08-06
+        2017-11-02
 
     Args:
-        loadVars - variables to be loaded (as CESM style)
-        yr1 - first year to be loaded (1981, 1986, or 1991) as string
-        newlat - latitude for new grid
-        newlon - longitude for new grid
-        regrid_flag - true to regrid to CESM grid
+        N/A
+
+    Kwargs:
+        daNewGrid - dataArray with new grid for regridding
+        kind - method to use for regridding
+        loadClimo_flag - True to only load climatology
+        newGridFile - file with new grid
+        newGridName - (str) name of new grid for regridding
+            available grids: '0.9x1.25'
+        qc_flag - True to make plots for quality control of regridding
+        regrid_flag - True to regrid to given new grid
+        whichErai - shortform for which file to load
+            'monsum' - sum of daily forecasts for monthly means
+            # others coming at some point in the future
 
     Returns:
-        erai - erai output
-        eraiDims - associated dimensions
+        eraiDs - xr dataset with fields from ERAI
+         (or)
+        eraiDsRg - xr dataset with regridded ERAI fields
 
     Notes:
-        Time referenced to start of run, not generally meaningful
+        Now works with xarray!
+        Available fields -
+            monmean - ci, sst, sp, msl, tcc, t2m, d2m, lcc, mcc, hcc, si10, skt
+                (sea ice cover, SST, Psfc, MSLP, CLOUDFRAC, T2m, TD2m,
+                 CLDLOW, CLDMED, CLDHIGH, U10, Tskin)
+            monmean.fc - iews, inss, ishf, ie (instantaneous fluxes)
+                (taux, tauy, SHF, evap)
 
     """
+    # Set directories for ERAI
+    eraiDir = '/home/disk/eos9/woelfle/dataset/ERAI/'
+    if whichErai == 'monsum':
+        eraiSubDir = 'monsum/'
+        if loadClimo_flag:
+            print('Not ready yet.')
+        else:
+            eraiFileList = ['ERAI.1979-1989.monsum.nc',
+                            'ERAI.1990-1999.monsum.nc',
+                            'ERAI.2000-2009.monsum.nc',
+                            # 'ERAI.2010-2010.monsum.nc'
+                            ]
+    elif whichErai == 'monmean':
+        eraiSubDir = 'monmean/'
+        if loadClimo_flag:
+            eraiFile = 'ERAI.197901-201012.allmonmean.monclimo.nc'
+        else:
+            eraiFileList = ['ERAI.1979-1989.monmean.nc',
+                            'ERAI.1990-1999.monmean.nc',
+                            'ERAI.2000-2009.monmean.nc'
+                            'ERAI.2010-2010.monmean.nc']
+
+    # Load dataset to file
+    if loadClimo_flag:
+        eraiDs = xr.open_dataset(eraiDir + eraiSubDir + eraiFile)
+    else:
+        eraiDs = xr.open_mfdataset([eraiDir + eraiSubDir + eraiFileList[j]
+                                    for j in range(len(eraiFileList))])
+
+    # Rename dimensions to match CESM standard
+    eraiDs.rename({'latitude': 'lat',
+                   'longitude': 'lon'},
+                  inplace=True
+                  )
+
+    # Add id to dataset
+    eraiDs.attrs['id'] = 'ERAI'
+
+    # Regrid if requested
+    if regrid_flag:
+        print('Cannot regrid yet')
+        eraiDsRG = eraiDs
+        return eraiDsRG
+    else:
+        return eraiDs
+
     # Dictionary to translate requested CESM variables to SODA variables
     cesm2eraiDict = {'PS': 'sp',
                      'PSL': 'msl',
@@ -2746,9 +2814,14 @@ def loadhadisst(daNewGrid=None,
         2017-10-24
 
     Args:
-
+        N/A
 
     Kwargs:
+        daNewGrid - dataArray with new grid for regridding
+        kind - method to use for regridding
+        newGridFile - file with new grid
+        newGridName - (str) name of new grid for regridding
+            > available grid: '0.9x1.25'
         qc_flag - True to make plots for quality control of regridding
         regrid_flag - True to regrid to given new grid
         whichHad - shortform for which file to load
@@ -2798,7 +2871,8 @@ def loadhadisst(daNewGrid=None,
         hadIsstDs['lon'].values = np.mod(hadIsstDs['lon'] + 360, 360)
 
     if regrid_flag:
-        hadIsstDsRG = xr.Dataset({'sst': roughregrid(
+        hadIsstDsRG = xr.Dataset({
+            'sst': roughregrid(
             hadIsstDs['sst'],
             daNewGrid=daNewGrid,
             kind=kind,

@@ -1308,7 +1308,7 @@ def calcdsctindex(ds,
 
     if indexType.lower() in ['woelfle', 'woelfleetal2017']:
         # Compute regional mean through time along equator
-        regMeanDs = calcdsregmean(ds[sstVar],
+        regMeanDa = calcdaregmean(ds[sstVar],
                                   gwDa=(ds['gw']
                                         if 'gw' in ds
                                         else None),
@@ -1324,7 +1324,7 @@ def calcdsctindex(ds,
                                   )
 
         # Compute reference regional mean over greater tropical Pacific
-        refRegMeanDs = calcdsregmean(ds[sstVar],
+        refRegMeanDa = calcdaregmean(ds[sstVar],
                                      gwDa=(ds['gw']
                                            if 'gw' in ds
                                            else None),
@@ -1340,12 +1340,12 @@ def calcdsctindex(ds,
                                      )
 
         # Compute CTI
-        ctDs = regMeanDs - refRegMeanDs
+        ctDa = regMeanDa - refRegMeanDa
     else:
         raise ValueError('Unknown indexType, {:s}, '.format(indexType) +
                          'for computing cold tongue index')
 
-    return ctDs
+    return ctDa
 
 
 def calcdsditczindex(ds,
@@ -1357,7 +1357,7 @@ def calcdsditczindex(ds,
    """
 
     if indexType.lower() in ['bellucci2010', 'bellucci10']:
-        regMeanDs = calcdsregmean(ds[precipVar],
+        regMeanDa = calcdaregmean(ds[precipVar],
                                   gwDa=(ds['gw']
                                         if 'gw' in ds
                                         else None),
@@ -1370,7 +1370,59 @@ def calcdsditczindex(ds,
         raise ValueError('Unknown indexType, {:s}, '.format(indexType) +
                          'for computing double-ITCZ index')
 
-    return regMeanDs
+    return regMeanDa
+
+
+def calcdswalkerindex(ds,
+                      indexType='firstguess',
+                      ocnOnly_flag=False,
+                      pressureVar='PS',
+                      ):
+    """
+    Compute Walker Circulation index for a given dataset and return as
+        data array
+   """
+
+    if indexType.lower() in ['firstguess', 'testing', 'new']:
+        # Compute regional mean through time along equator
+        regMeanDa = calcdaregmean(ds[pressureVar],
+                                  gwDa=(ds['gw']
+                                        if 'gw' in ds
+                                        else None),
+                                  latLim=np.array([-5, 5]),
+                                  lonLim=np.array([240, 270]),
+                                  ocnOnly_flag=(ocnOnly_flag
+                                                if 'LANDFRAC' in ds
+                                                else False),
+                                  landFracDa=(ds['LANDFRAC']
+                                              if 'LANDFRAC' in ds
+                                              else None),
+                                  stdUnits_flag=True,
+                                  )
+
+        # Compute reference regional mean over greater tropical Pacific
+        refRegMeanDa = calcdaregmean(ds[pressureVar],
+                                     gwDa=(ds['gw']
+                                           if 'gw' in ds
+                                           else None),
+                                     latLim=np.array([-5, 5]),
+                                     lonLim=np.array([150, 180]),
+                                     ocnOnly_flag=(ocnOnly_flag
+                                                   if 'LANDFRAC' in ds
+                                                   else False),
+                                     landFracDa=(ds['LANDFRAC']
+                                                 if 'LANDFRAC' in ds
+                                                 else None),
+                                     stdUnits_flag=True,
+                                     )
+
+        # Compute Walker Circulation index
+        walkerDa = regMeanDa - refRegMeanDa
+    else:
+        raise ValueError('Unknown indexType, {:s}, '.format(indexType) +
+                         'for computing cold tongue index')
+
+    return walkerDa
 
 
 def convertsigmatopres(inData,

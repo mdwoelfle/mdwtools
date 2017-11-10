@@ -1069,6 +1069,9 @@ def calcdaregmean(da,
         stdUnits_flag - True to convert to standard units before taking
             regional mean
     """
+    # Break if attempting to run on multiple pressure levels
+    # if np.ndim(da) == 4:
+    #     raise ValueError('Cannot process 4D vars at this time')
 
     # Convert ds to standard units
     if stdUnits_flag:
@@ -1425,6 +1428,108 @@ def calcdswalkerindex(ds,
     return walkerDa
 
 
+def regriddssigmatopres(dsIn,
+                        regridVar,
+                        newLevs,
+                        modelId='cesm',
+                        verbose_flag=False):
+    """
+    Convert dataArray in dataIn from hybrid sigma vertical coordinate to
+        pressure vertical coordinate.
+    Wrapper for convertsigmatopres.
+
+    Author:
+        Matthew Woelfle (mdwoelfle@gmail.com)
+        (adapted from MATLAB code written by Dan Vimont:
+            http://www.aos.wisc.edu/~dvimont/matlab/)
+
+    Version Date:
+        2017-11-07
+
+    Args:
+        dsIn - cesm dataSet with dataArray to be converted to pressure levels
+            from hybrid sigma levels
+            > Should contain: 'PS', 'hyam', 'hybm', <field to be regridded>
+        regridVar - variable to be regridded
+        newlevs - pressure levels to which the data is to be interpolated (hPa)
+
+    Kwargs:
+        modelid - source model ('am2', 'cesm')
+        verbose_flag - True to output which levels are being computed
+
+    Returns:
+        regriddedDa - requested data field as an xr.DataArray on pressure
+            levels instead of hybrid sigma levels
+
+    Conventions are:
+        1.  Assume ps is in Pa (we will convert this to hPa)
+        2.  Assume newLevs is in hPa
+        3.  [ntim, nlev, nlat, nlon] = size(in);
+        4.  [ntim, nlat, nlon] = size(ps);
+        5.  nlev2 = length(newlevs);
+        6.  [ntim, nlev2, nlat, nlon] = size(out);
+        Note that for the above, singleton dimensions should be preserved.
+    """
+
+    # dsIn = dataSets['01']
+
+    # Convert vertical units to new grid
+    regriddedData = convertsigmatopres(
+        dsIn[regridVar].values,
+        dsIn['PS'].values,
+        newLevs,
+        hCoeffs={'hyam': dsIn['hyam'].mean(dim='time').values,
+                 'hybm': dsIn['hybm'].mean(dim='time').values},
+        modelid=modelId,
+        verbose_flag=verbose_flag,
+        )
+
+    # Convert regriddedData (np.array) to xr.DataArray
+    regriddedDa = xr.DataArray(
+        regriddedData,
+        coords=[dsIn['time'],
+                newLevs,
+                dsIn['lat'],
+                dsIn['lon']],
+        dims=['time', 'plev', 'lat', 'lon'],
+        name=regridVar,
+        )
+
+    # Set attributes for regridded variable
+    regriddedDa.attrs['long_name'] = dsIn[regridVar].long_name
+    regriddedDa.attrs['units'] = dsIn[regridVar].units
+    # Assign id for QC purposes if possible
+    if 'id' in dsIn.attrs:
+        regriddedDa.attrs['id'] = dsIn.id
+
+    # Set atributes for plev coordinate
+    regriddedDa['plev'].attrs['long_name'] = 'pressure level at midpoints'
+    regriddedDa['plev'].attrs['units'] = 'hPa'
+
+    # Return data interpolated to defined pressure levels
+    return regriddedDa
+
+
+def regriddssigmatopres_mp(inTuple):
+    """
+    Wrapper for multiprocessing of convertdssigmatopres
+
+    Version Date: 2017-11-07
+    """
+
+    if len(inTuple) == 4:
+        return regriddssigmatopres(inTuple[0],
+                                   inTuple[1],
+                                   inTuple[2],
+                                   modelId=inTuple[3],
+                                   )
+    elif len(inTuple) == 3:
+        return regriddssigmatopres(inTuple[0],
+                                   inTuple[1],
+                                   inTuple[2],
+                                   )
+
+
 def convertsigmatopres(inData,
                        ps,
                        newlevs,
@@ -1441,7 +1546,7 @@ def convertsigmatopres(inData,
             http://www.aos.wisc.edu/~dvimont/matlab/)
 
     Version Date:
-        2017-06-13
+        2017-11-07
 
     Args:
         in - data to be converted to pressure levels from hybrid sigma levels
@@ -1464,6 +1569,9 @@ def convertsigmatopres(inData,
         5.  nlev2 = length(newlevs);
         6.  [ntim, nlev2, nlat, nlon] = size(out);
         Note that for the above, singleton dimensions should be preserved.
+
+    Notes:
+        2017-11-07: Made function python3 compatible
     """
 
     # Make sure newlevs are in Pa
@@ -1471,7 +1579,7 @@ def convertsigmatopres(inData,
         newlevs = newlevs*100
 
     # True if coefficients are for interfaces not box centers
-    int_flag = False
+    interface_flag = False
 
     # Get model level coefficients
     if hCoeffs is None:
@@ -1498,29 +1606,28 @@ def convertsigmatopres(inData,
     shape_in = inData.shape
 
     if dims_ps != (dims_in - 1):
-        # print('Variable ''inData'' should have one more dimension than' +
-        #       ' ''ps''.')
         raise ValueError('Variable ''inData'' should have one more dimension' +
                          ' than ''ps''.')
-        # return
 
     if shape_in[1] == (nlev - 1):
-        int_flag = True
+        interface_flag = True
         nlevi = nlev
         nlev = nlevi - 1
     elif shape_in[1] != nlev:
-        # print('Either ''inData'' has an inconsistent level dimension, or ' +
-        #       'the order (ntim, nlev, nlat, nlon) is wrong.')
+        print(shape_in[1])
+        print(nlev)
         raise ValueError('Either ''inData'' has an inconsistent level ' +
                          'dimension, or the order (ntim, nlev, nlat, nlon) ' +
                          'is wrong.')
-        # return
 
     #  Reorder dimensions so level is the first dimension (move time to end)
     inData = np.rollaxis(inData, 0, 4)
 
+    # Determinenumber of points (columns) to regrid
+    npts = int(np.prod(shape_in)/nlev)
+
     # Reshape for some reason...
-    inData = inData.reshape([shape_in[1], np.prod(shape_in)/nlev])
+    inData = inData.reshape([shape_in[1], npts])
 
     # Reshape surface pressure field to match reshaped inData
     ps = np.rollaxis(ps, 0, 3)
@@ -1533,15 +1640,12 @@ def convertsigmatopres(inData,
                          'dimensions')
         return
 
-    # Determinenumber of points (columns) to regrid
-    npts = np.prod(shape_in)/nlev
-
     #  Now that ps is 2D, make sure units are in Pa
     if np.round(np.log10(np.mean(np.mean(ps)))) == 3:
         ps = ps*100
 
     #  Now, do interpolation
-    outData = np.empty([nlev2, np.prod(shape_in)/shape_in[1]])
+    outData = np.empty([nlev2, int(np.prod(shape_in)/shape_in[1])])
 
     # Get size of hyam, hybm
     nHyam = hyam.size
@@ -1553,7 +1657,7 @@ def convertsigmatopres(inData,
     # Convert from interface pressures to box center pressures if needed. Use
     #   linear interpolation between interface (aka: use mean of interfaces
     #   as pressure for box center.)
-    if int_flag:
+    if interface_flag:
         plevs = (plevs[1:, :] + plevs[:-1, :])/2.
 
     # Loop through each new level to which data is to be interpolated
@@ -1717,7 +1821,14 @@ def gethybsigcoeff(modelid='cesm', coordFile=None):
     """
     Obtain hybrid sigma coefficients for finding pressure levels of model
         interfaces and model box centers
-    2015-08-27
+
+    Version Date: 2015-08-27
+
+    Returns:
+        hyai - hybrid a coefficient on box interface
+        hybi - hybrid b coefficient on box interface
+        hyam - hybrid a coefficient at box center
+        hybm - hybrid b coefficient at box center
     """
     # If coordFile not provided, find file for loading coefficients based on
     #    server
@@ -2199,7 +2310,10 @@ def getstandardunits(varName):
                     'TAUX': 'N/m2',
                     'TAUY': 'N/m2',
                     'TREFHT': 'K',
-                    'TS': 'K'}[varName]
+                    'TS': 'K',
+                    'U': 'm/s',
+                    'V': 'm/s',
+                    }[varName]
     except KeyError:
         raise KeyError('Cannot find standard units for ' + varName)
 

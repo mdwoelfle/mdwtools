@@ -1301,6 +1301,55 @@ def calcdaregzonmean(da,
     return regMeanDa
 
 
+def calcdscpacshear(ds,
+                    indexType='testing',
+                    indexVar='U',
+                    ocnOnly_flag=False,
+                    ):
+    """
+    Compute wind shear over the central Pacific for a given dataset and
+        return as dataArray
+    """
+    if indexType.lower() in ['testing']:
+
+        # Set region limits
+        latLim = np.array([-3, 3])
+        lonLim = np.array([180, 220])
+
+        # Set levels
+        #   shear(u) = u(plev) - u(diffPlev)
+        plev = 850
+        diffPlev = 200
+
+        # Compute regional mean through time along equator
+        regMeanDa = calcdaregmean(ds[indexVar],
+                                  gwDa=(ds['gw']
+                                        if 'gw' in ds
+                                        else None),
+                                  latLim=latLim,
+                                  lonLim=lonLim,
+                                  ocnOnly_flag=(ocnOnly_flag
+                                                if 'LANDFRAC' in ds
+                                                else False),
+                                  landFracDa=(ds['LANDFRAC']
+                                              if 'LANDFRAC' in ds
+                                              else None),
+                                  stdUnits_flag=True,
+                                  )
+
+        # Squeeze and localize winds to allow for differencing
+        u850Da = regMeanDa.loc[dict(plev=slice(plev, plev))].squeeze()
+        u200Da = regMeanDa.loc[dict(plev=slice(diffPlev, diffPlev))].squeeze()
+
+        # Compute wind shear as dataArray
+        shearDa = u850Da - u200Da
+    else:
+        raise ValueError('Unknown indexType, {:s}, '.format(indexType) +
+                         'for computing central Pacific shear')
+
+    return shearDa
+
+
 def calcdsctindex(ds,
                   indexType='Woelfleetal2017',
                   sstVar='TS',
@@ -1377,53 +1426,85 @@ def calcdsditczindex(ds,
 
 
 def calcdswalkerindex(ds,
-                      indexType='firstguess',
+                      indexType='DiNezioetal2013',
                       ocnOnly_flag=False,
-                      pressureVar='PS',
+                      pressureVar='PSL',
                       ):
     """
     Compute Walker Circulation index for a given dataset and return as
         data array
-   """
+
+    Version Date: 2017-11-30
+    """
 
     if indexType.lower() in ['firstguess', 'testing', 'new']:
-        # Compute regional mean through time along equator
-        regMeanDa = calcdaregmean(ds[pressureVar],
-                                  gwDa=(ds['gw']
-                                        if 'gw' in ds
-                                        else None),
-                                  latLim=np.array([-5, 5]),
-                                  lonLim=np.array([240, 270]),
-                                  ocnOnly_flag=(ocnOnly_flag
-                                                if 'LANDFRAC' in ds
-                                                else False),
-                                  landFracDa=(ds['LANDFRAC']
-                                              if 'LANDFRAC' in ds
-                                              else None),
-                                  stdUnits_flag=True,
-                                  )
-
-        # Compute reference regional mean over greater tropical Pacific
-        refRegMeanDa = calcdaregmean(ds[pressureVar],
-                                     gwDa=(ds['gw']
-                                           if 'gw' in ds
-                                           else None),
-                                     latLim=np.array([-5, 5]),
-                                     lonLim=np.array([150, 180]),
-                                     ocnOnly_flag=(ocnOnly_flag
-                                                   if 'LANDFRAC' in ds
-                                                   else False),
-                                     landFracDa=(ds['LANDFRAC']
+        # Compute equatorial mean through time in eastern Pacific
+        regMeanEDa = calcdaregmean(ds[pressureVar],
+                                   gwDa=(ds['gw']
+                                         if 'gw' in ds
+                                         else None),
+                                   latLim=np.array([-5, 5]),
+                                   lonLim=np.array([240, 270]),
+                                   ocnOnly_flag=(ocnOnly_flag
                                                  if 'LANDFRAC' in ds
-                                                 else None),
-                                     stdUnits_flag=True,
-                                     )
+                                                 else False),
+                                   landFracDa=(ds['LANDFRAC']
+                                               if 'LANDFRAC' in ds
+                                               else None),
+                                   stdUnits_flag=True,
+                                   )
+
+        # Compute equatorial mean through time in western Pacific
+        regMeanWDa = calcdaregmean(ds[pressureVar],
+                                   gwDa=(ds['gw']
+                                         if 'gw' in ds
+                                         else None),
+                                   latLim=np.array([-5, 5]),
+                                   lonLim=np.array([150, 180]),
+                                   ocnOnly_flag=(ocnOnly_flag
+                                                 if 'LANDFRAC' in ds
+                                                 else False),
+                                   landFracDa=(ds['LANDFRAC']
+                                               if 'LANDFRAC' in ds
+                                               else None),
+                                   stdUnits_flag=True,
+                                   )
 
         # Compute Walker Circulation index
-        walkerDa = regMeanDa - refRegMeanDa
+        walkerDa = regMeanEDa - regMeanWDa
+
+    elif indexType.lower() in ['dinezioetal2013']:
+        if pressureVar not in ['PSL', 'msl']:
+            raise ValueError('For DiNezioetal2013 Walker metric, must use ' +
+                             'mean sea level pressure (PSL or msl)')
+        # Compute near-Tahiti regional mean through time  (E. Pac.)
+        regMeanEDa = calcdaregmean(ds[pressureVar],
+                                   gwDa=(ds['gw']
+                                         if 'gw' in ds
+                                         else None),
+                                   latLim=np.array([-5, 5]),
+                                   lonLim=np.array([200, 280]),
+                                   ocnOnly_flag=False,
+                                   stdUnits_flag=True,
+                                   )
+
+        # Compute near-Darwin regional mean through time  (W. Pac.)
+        regMeanWDa = calcdaregmean(ds[pressureVar],
+                                   gwDa=(ds['gw']
+                                         if 'gw' in ds
+                                         else None),
+                                   latLim=np.array([-5, 5]),
+                                   lonLim=np.array([100, 180]),
+                                   ocnOnly_flag=False,
+                                   stdUnits_flag=True,
+                                   )
+
+        # compute Walker Circulation Index as dSLP
+        walkerDa = regMeanEDa - regMeanWDa
+
     else:
         raise ValueError('Unknown indexType, {:s}, '.format(indexType) +
-                         'for computing cold tongue index')
+                         'for computing Walker index')
 
     return walkerDa
 
@@ -1762,6 +1843,7 @@ def convertunit(inData, inUnit, outUnit,
                             ('m/s', 'kg/m2/s'): rhow,
                             ('m/s', 'mm/d'): mmperm*sperd,
                             ('m/s', 'W/m2'): rhow*lv,
+                            ('m s**-1', 'm/s'): 1.,
                             ('W/m2', 'kg/m2/s'): 1./lv,
                             ('W/m2', 'mm/d'): mmperm*sperd/rhow/lv,
                             ('W/m2', 'm/s'): 1./rhow/lv,
@@ -2299,11 +2381,13 @@ def getstandardunits(varName):
                     'FSDS': 'W/m2',
                     'FSNS': 'W/m2',
                     'LHFLX': 'W/m2',
+                    'msl': 'hPa',
                     'PRECC': 'mm/d',
                     'PRECL': 'mm/d',
                     'PRECT': 'mm/d',
                     'precip': 'mm/d',
                     'PS': 'hPa',
+                    'PSL': 'hPa',
                     'SHFLX': 'W/m2',
                     'sp': 'hPa',
                     'sst': 'K',
@@ -2312,7 +2396,9 @@ def getstandardunits(varName):
                     'TREFHT': 'K',
                     'TS': 'K',
                     'U': 'm/s',
+                    'u': 'm/s',
                     'V': 'm/s',
+                    'v': 'm/s',
                     }[varName]
     except KeyError:
         raise KeyError('Cannot find standard units for ' + varName)
@@ -2706,6 +2792,7 @@ def loaderai(daNewGrid=None,
                  CLDLOW, CLDMED, CLDHIGH, U10, Tskin)
             monmean.fc - iews, inss, ishf, ie (instantaneous fluxes)
                 (taux, tauy, SHF, evap)
+            monmean.3d - u, v, w
 
     """
     # Set directories for ERAI
@@ -2727,8 +2814,17 @@ def loaderai(daNewGrid=None,
         else:
             eraiFileList = ['ERAI.1979-1989.monmean.nc',
                             'ERAI.1990-1999.monmean.nc',
-                            'ERAI.2000-2009.monmean.nc'
+                            'ERAI.2000-2009.monmean.nc',
                             'ERAI.2010-2010.monmean.nc']
+    elif whichErai == 'monmean.3d':
+        eraiSubDir = 'monmean/'
+        if loadClimo_flag:
+            eraiFile = 'ERAI.197901-201012.monmean.3d.monclimo.nc'
+        else:
+            eraiFileList = ['ERAI.1979-1989.monmean.3d.nc',
+                            'ERAI.1990-1999.monmean.3d.nc',
+                            'ERAI.2000-2009.monmean.3d.nc',
+                            'ERAI.2010-2010.monmean.3d.nc']
 
     # Load dataset to file
     if loadClimo_flag:
@@ -2738,10 +2834,17 @@ def loaderai(daNewGrid=None,
                                     for j in range(len(eraiFileList))])
 
     # Rename dimensions to match CESM standard
-    eraiDs.rename({'latitude': 'lat',
-                   'longitude': 'lon'},
-                  inplace=True
-                  )
+    try:
+        eraiDs.rename({'latitude': 'lat',
+                       'level': 'plev',
+                       'longitude': 'lon'},
+                      inplace=True
+                      )
+    except ValueError:
+        eraiDs.rename({'latitude': 'lat',
+                       'longitude': 'lon'},
+                      inplace=True
+                      )
 
     # Add id to dataset
     eraiDs.attrs['id'] = 'ERAI'

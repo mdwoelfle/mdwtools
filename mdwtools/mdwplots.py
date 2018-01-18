@@ -948,6 +948,7 @@ def getcmap(plotVar,
                     'TAUY': 'RdBu_r',
                     'TS': 'Reds',
                     'U': 'RdBu_r',
+                    'U10': 'Reds',
                     'V': 'RdBu_r',
                     'curlTau': 'RdBu_r',
                     'curlTau_y': 'RdBu_r',
@@ -1608,6 +1609,7 @@ def plotmap(lon, lat, plotData,
             plottype='contourf',
             projection='cea',
             quiver_flag=False,
+            quiverKey_flag=True,
             quiverScale=0.4,
             quiverUnits='inches',
             returnM_flag=False,
@@ -1742,12 +1744,14 @@ def plotmap(lon, lat, plotData,
                       pivot='tail',
                       units=quiverUnits,
                       scale=quiverScale)
-        plt.quiverkey(q1, 0.5, 1.05, Uref,
-                      Uname + ' (' +
-                      '{:0.5f}'.format(Uref).rstrip('0').rstrip('.') + ' ' +
-                      mwfn.getstandardunitstring(Uunits) + ')',
-                      coordinates='axes',
-                      labelpos='E')
+        if quiverKey_flag:
+            plt.quiverkey(q1, 0.5, 1.05, Uref,
+                          Uname + ' (' +
+                          '{:0.5f}'.format(Uref).rstrip('0').rstrip('.') +
+                          ' ' +
+                          mwfn.getstandardunitstring(Uunits) + ')',
+                          coordinates='axes',
+                          labelpos='E')
         # return (U, V, q1)
 
     # Plot black contour for reference
@@ -2625,6 +2629,7 @@ def plotzonslice(merMean, lon, z, plot_t,
                  ):
     """
     Contours a zonal slice of a field over a given region and time period.
+    --Built for ocean output!
 
     Author:
         Matthew Woelfle (mdwoelfle@gmail.com)

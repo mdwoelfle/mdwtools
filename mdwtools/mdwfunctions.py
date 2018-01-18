@@ -1560,7 +1560,8 @@ def regriddssigmatopres(dsIn,
         dsIn['PS'].values,
         newLevs,
         hCoeffs={'hyam': dsIn['hyam'].mean(dim='time').values,
-                 'hybm': dsIn['hybm'].mean(dim='time').values},
+                 'hybm': dsIn['hybm'].mean(dim='time').values,
+                 'P0': dsIn['P0'].values[0]},
         modelid=modelId,
         verbose_flag=verbose_flag,
         )
@@ -1655,22 +1656,26 @@ def convertsigmatopres(inData,
         2017-11-07: Made function python3 compatible
     """
 
-    # Make sure newlevs are in Pa
-    if np.round(np.log10(np.mean(newlevs[:]))) == 3:
+    # Make sure newlevs are in Pa by checking order of pressure values
+    if np.round(np.log10(np.mean(newlevs[:]))) <= 3:
         newlevs = newlevs*100
+    if verbose_flag:
+        print('newlevs (hPa):')
+        print(newlevs[0])
 
     # True if coefficients are for interfaces not box centers
     interface_flag = False
 
     # Get model level coefficients
     if hCoeffs is None:
-        hyam, hybm = gethybsigcoeff(modelid=modelid)[2:]
+        hyam, hybm, P0 = gethybsigcoeff(modelid=modelid)[2:]
     else:
         try:
             hyam = hCoeffs['hyam']
             hybm = hCoeffs['hybm']
+            P0 = hCoeffs['P0']
         except KeyError:
-            raise KeyError('Can''t find hyam/hybm in dictionary')
+            raise KeyError('Can''t find hyam/hybm/P0 in dictionary')
 
     # Set reference pressure value
     # pnot = 1000;
@@ -1704,10 +1709,10 @@ def convertsigmatopres(inData,
     #  Reorder dimensions so level is the first dimension (move time to end)
     inData = np.rollaxis(inData, 0, 4)
 
-    # Determinenumber of points (columns) to regrid
+    # Determinenumber of points (columns*time) to regrid
     npts = int(np.prod(shape_in)/nlev)
 
-    # Reshape for some reason...
+    # Reshape to be number of levels x (lat*lon*time)
     inData = inData.reshape([shape_in[1], npts])
 
     # Reshape surface pressure field to match reshaped inData
@@ -1722,7 +1727,7 @@ def convertsigmatopres(inData,
         return
 
     #  Now that ps is 2D, make sure units are in Pa
-    if np.round(np.log10(np.mean(np.mean(ps)))) == 3:
+    if np.round(np.log10(np.mean(np.mean(ps)))) <= 3:
         ps = ps*100
 
     #  Now, do interpolation
@@ -1730,10 +1735,12 @@ def convertsigmatopres(inData,
 
     # Get size of hyam, hybm
     nHyam = hyam.size
+    nHybm = nHyam  # Assume coeff. arays are same size
 
-    # Matrix multiplication
-    plevs = (np.dot(hyam.reshape([nHyam, 1]), np.ones_like(ps)) +
-             np.dot(hybm.reshape([nHyam, 1]), ps))
+    # Generate matrix of pressure levels for each hybrid level
+    #   using matrix multiplication (similar to repmat)
+    plevs = (np.dot(hyam.reshape([nHyam, 1]), np.ones_like(ps))*P0 +
+             np.dot(hybm.reshape([nHybm, 1]), ps))
 
     # Convert from interface pressures to box center pressures if needed. Use
     #   linear interpolation between interface (aka: use mean of interfaces
@@ -1911,6 +1918,7 @@ def gethybsigcoeff(modelid='cesm', coordFile=None):
         hybi - hybrid b coefficient on box interface
         hyam - hybrid a coefficient at box center
         hybm - hybrid b coefficient at box center
+        P0 - reference surface pressure
     """
     # If coordFile not provided, find file for loading coefficients based on
     #    server
@@ -1926,7 +1934,7 @@ def gethybsigcoeff(modelid='cesm', coordFile=None):
 
     # Set variable names for hybrid sigma coefficients
     if modelid == 'cesm':
-        hybcoeffs = ['hyai', 'hybi', 'hyam', 'hybm']
+        hybcoeffs = ['hyai', 'hybi', 'hyam', 'hybm', 'P0']
     elif modelid == 'am2':
         hybcoeffs = ['pk', 'bk']
 
@@ -1940,11 +1948,13 @@ def gethybsigcoeff(modelid='cesm', coordFile=None):
         if modelid == 'cesm':
             hyam = ncDataset.variables[hybcoeffs[2]][:]
             hybm = ncDataset.variables[hybcoeffs[3]][:]
+            P0 = ncDataset.variables[hybcoeffs[4]][:]
         else:
             hyam = None
             hybm = None
+            P0 = None
 
-    return (hyai, hybi, hyam, hybm)
+    return (hyai, hybi, hyam, hybm, P0)
 
 
 class ncgenvar:
@@ -2396,6 +2406,8 @@ def getstandardunits(varName):
                     'TREFHT': 'K',
                     'TS': 'K',
                     'U': 'm/s',
+                    'U10': 'm/s',
+                    'Z3': 'm',
                     'u': 'm/s',
                     'V': 'm/s',
                     'v': 'm/s',
@@ -3063,7 +3075,8 @@ def loadgpcp(loadYrs,
     return gpcp
 
 
-def loadhadisst(daNewGrid=None,
+def loadhadisst(climoType=None,
+                daNewGrid=None,
                 kind='linear',
                 newGridFile=None,
                 newGridName=None,
@@ -3072,6 +3085,7 @@ def loadhadisst(daNewGrid=None,
                 qc_flag=False,
                 regrid_flag=False,
                 whichHad='pd_monclimo',
+                years=[1979, 2010],
                 ):
     """
     Load HadISST data from netCDF file
@@ -3139,16 +3153,17 @@ def loadhadisst(daNewGrid=None,
         # Update longitudes to be positive definite
         hadIsstDs['lon'].values = np.mod(hadIsstDs['lon'] + 360, 360)
 
+    # Regrid data if necessary
     if regrid_flag:
         hadIsstDsRG = xr.Dataset({
             'sst': roughregrid(
-            hadIsstDs['sst'],
-            daNewGrid=daNewGrid,
-            kind=kind,
-            newGridFile=newGridFile,
-            newGridName=newGridName,
-            newLat=newLat,
-            newLon=newLon)
+                hadIsstDs['sst'],
+                daNewGrid=daNewGrid,
+                kind=kind,
+                newGridFile=newGridFile,
+                newGridName=newGridName,
+                newLat=newLat,
+                newLon=newLon)
             })
         hadIsstDsRG.attrs['id'] = 'HadISST_rg'
 
@@ -3168,9 +3183,29 @@ def loadhadisst(daNewGrid=None,
                            vmin=290,
                            vmax=305)
 
-        return hadIsstDsRG
-    else:
-        return hadIsstDs
+        hadIsstDs = hadIsstDsRG
+
+    # Create climatology if requested
+    if climoType == 'monthly':
+        # Subset to requested years
+        hadIsstDs_sub = hadIsstDs.loc[
+                dict(time=slice('{:4d}-01-01'.format(years[0]),
+                                '{:4d}-12-31'.format(years[1])))
+                ]
+        # Compute monthly means (i.e. seasonal cycle)
+        hadIsstDs_new = hadIsstDs_sub.groupby('time.month').mean(dim='time')
+
+        # Copy attrs as this is not done in the above line for some reason.
+        hadIsstDs_new['sst'].attrs = hadIsstDs['sst'].attrs
+        hadIsstDs_new.attrs['id'] = hadIsstDs.id
+
+        # Use "new" hadIsstDS
+        hadIsstDs = hadIsstDs_new
+        print('Using HadISST from {:d}-{:d}'.format(years[0],
+                                                    years[1]))
+
+    # Return Hadley SST as data structure
+    return hadIsstDs
 
 
 def loadhybtop(histDir, caseName,

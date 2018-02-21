@@ -1090,10 +1090,20 @@ def calcdaregmean(da,
 
     # Filter to ocean only if requested
     if ocnOnly_flag:
+        if qc_flag:
+            print('Setting ocean points to nan')
+
+        # Create deep copy of da to avoid altering the top level data array
+        daNew = da.copy(deep=True)
+
         # Create ocean filter as True wherever the is no land
         ocnFilt = (landFracDa.values == 0)
+
         # Set values in ds to nan wherever there is some land
-        da.values[~ocnFilt] = np.nan
+        daNew.values[~ocnFilt] = np.nan
+
+        # Write over da locally
+        da = daNew
 
     # Pull area weights
     if gwDa is not None:
@@ -1220,10 +1230,20 @@ def calcdaregzonmean(da,
 
     # Filter to ocean only if requested
     if ocnOnly_flag:
+        if qc_flag:
+            print('Setting ocean points to nan')
+
+        # Create deep copy of da to avoid altering the top level data array
+        daNew = da.copy(deep=True)
+
         # Create ocean filter as True wherever the is no land
         ocnFilt = (landFracDa.values == 0)
+
         # Set values in ds to nan wherever there is some land
-        da.values[~ocnFilt] = np.nan
+        daNew.values[~ocnFilt] = np.nan
+
+        # Write over da locally
+        da = daNew
 
     # Pull area weights
     if gwDa is not None:
@@ -1423,6 +1443,60 @@ def calcdsditczindex(ds,
                          'for computing double-ITCZ index')
 
     return regMeanDa
+
+
+def calcdsprecipasymindex(ds,
+                          indexType='HwangFrierson2012',
+                          precipVar='PRECT',
+                          qc_flag=False,
+                          ):
+    """
+    Compute the precipitation asymmetry index for a given dataset and return
+        as dataarray
+    """
+    if indexType.lower() in ['hwangfrierson2012']:
+        # Compute northern tropics mean precip rate
+        nhRegMeanDa = calcdaregmean(ds[precipVar],
+                                    gwDa=(ds['gw']
+                                          if 'gw' in ds
+                                          else None),
+                                    latLim=np.array([0, 20]),
+                                    lonLim=np.array([0, 360]),
+                                    ocnOnly_flag=False,
+                                    stdUnits_flag=True,
+                                    )
+
+        # Compute southern tropics mean precip rate
+        shRegMeanDa = calcdaregmean(ds[precipVar],
+                                    gwDa=(ds['gw']
+                                          if 'gw' in ds
+                                          else None),
+                                    latLim=np.array([-20, 0]),
+                                    lonLim=np.array([0, 360]),
+                                    ocnOnly_flag=False,
+                                    stdUnits_flag=True,
+                                    )
+
+        # Compute precipitation asymmetry index
+        # PAI = (P(0-20N) - P(20S-0))/P(20S-20N)
+        paiDa = (nhRegMeanDa - shRegMeanDa)/((nhRegMeanDa + shRegMeanDa)/2.)
+
+        # Make plot for QC purposes
+        if qc_flag:
+            plt.figure()
+            plt.plot(nhRegMeanDa.values, label='NH')
+            plt.plot(shRegMeanDa.values, label='SH')
+            plt.plot((nhRegMeanDa.values + shRegMeanDa.values)/2, label='Sum')
+            plt.legend()
+
+        # Update attributes on paiDa
+        paiDa.name = 'PAI'
+        paiDa.attrs['long_name'] = 'Precipitation Asymmetry Index'
+        paiDa.attrs['units'] = None
+    else:
+        raise ValueError('Unknown indexType, {:s}, '.format(indexType) +
+                         'for computing precipitation asymmetry index')
+    return paiDa
 
 
 def calcdswalkerindex(ds,
@@ -1780,6 +1854,293 @@ def convertsigmatopres(inData,
     return outData
 
 
+def convertsigmatopresds_mp(inTuple):
+    """
+    Wrapper for multiprocessing of convertsigmatopresds.
+    Does multiprocessing across multiple cases.
+
+    """
+    # kwargs:
+    #   hCoeffs=None,
+    #   modelid='cesm',
+    #   psVar='PS',
+    #   verbose_flag=False)
+
+    return convertsigmatopresds(inTuple[0],    # dsIn
+                                inTuple[1],    # regridVars
+                                inTuple[2],    # newlevs
+                                **inTuple[3],  # kwargs
+                                )
+
+
+def convertsigmatopresds(dsIn,
+                         regridVars,
+                         newlevs,
+                         hCoeffs=None,
+                         modelid='cesm',
+                         psVar='PS',
+                         verbose_flag=False):
+    """
+    Convert specified variables in a dataset from hybrid sigma vertical
+    coordinate to pressure vertical coordinate.
+
+    Author:
+        Matthew Woelfle (mdwoelfle@gmail.com)
+        (adapted from MATLAB code written by Dan Vimont:
+            http://www.aos.wisc.edu/~dvimont/matlab/
+         through several levels of abstraction)
+
+    Version Date:
+        2018-01-23
+
+    Args:
+        in - xrray dataset containing variables to be regridded
+        regridVars - variables to be remapped to new grid
+        newlevs - pressure levels to which the data is to be interpolated (hPa)
+        hCoeffs - dictionary of hybrid sigma coefficients; loaded from file
+            if not provided.
+        modelid - source model ('am2', 'cesm')
+        psVar - name of surface pressure variable in dataset
+            (CAREFUL:  we will attempt to convert this to hPa from Pa).
+        verbose_flag - True to output which levels are being computed
+
+    Returns:
+        dsOut - dataset with regridVars on pressure levels instead of hybrid
+            sigma levels
+
+    Conventions are:
+        1.  Assume ps is in Pa (we will convert this to hPa)
+        2.  Assume newlev is in hPa
+        3.  [ntim, nlev, nlat, nlon] = size(in);
+        4.  [ntim, nlat, nlon] = size(ps);
+        5.  nlev2 = length(newlevs);
+        6.  [ntim, nlev2, nlat, nlon] = size(out);
+        Note that for the above, singleton dimensions should be preserved.
+
+    Notes:
+        2017-11-07: Made function python3 compatible
+        2017-01-24: Updated to regrid all variables of interested in a dataset
+                        with one function call. Now significantly faster when
+                        converting multiple variables at once. 3% slower for a
+                        single variable.
+    """
+    if verbose_flag:
+        print(regridVars)
+    # Make sure newlevs are in Pa by checking order of pressure values
+    if np.round(np.log10(np.mean(newlevs[:]))) <= 3:
+        newlevs = newlevs*100
+    if verbose_flag:
+        print('newlevs (hPa):')
+        print(newlevs[0])
+
+    # True if coefficients are for interfaces not box centers
+    interface_flag = False
+
+    # Get model level coefficients
+    if hCoeffs is None:
+        hyam, hybm, P0 = gethybsigcoeff(modelid=modelid)[2:]
+    else:
+        try:  # Get hybrid A coefficients
+            hyam = hCoeffs['hyam']
+        except KeyError:
+            raise KeyError('Can''t find hyam in dictionary')
+        try:  # Get hybrid B coefficients
+            hybm = hCoeffs['hybm']
+        except KeyError:
+            raise KeyError('Can''t find hybm in dictionary')
+        try:  # Get reference surface pressure
+            P0 = hCoeffs['P0']
+        except KeyError:
+            raise KeyError('Can''t find P0 in dictionary')
+
+    # Get number of old levels
+    nlev = hyam.size
+    # Get new levels as a vector
+    newlevs = newlevs[:]
+    # Get number of new levels
+    nlev2 = newlevs.size
+
+    # Get number of dims for surface pressure field
+    dims_ps = np.ndim(dsIn[psVar].data)
+    # Get number of dims for field to be regridded
+    dims_in = np.ndim(dsIn[regridVars[0]].data)
+    # Get shape of field to be regridded
+    # ASSUMES ALL FIELDS ARE THE SAME SHAPE!!
+    shape_in = dsIn[regridVars[0]].data.shape
+
+    # Ensure data to be regridded has one extra dimension compared to surface
+    #   pressure. This is presumed to be height (vertical dimension).
+    if dims_ps != (dims_in - 1):
+        raise ValueError('Variable ''inData'' should have one more dimension' +
+                         ' than ''ps''.')
+
+    # Automatically detect if dealing with interfaces by checking size of
+    #   field to be regridded against number of levels. update nlev as needed
+    if shape_in[1] == (nlev - 1):
+        interface_flag = True
+        nlevi = nlev
+        nlev = nlevi - 1
+    # If not interfaces, ensure field to be regridded has the proper number of
+    #   vertical levels
+    elif shape_in[1] != nlev:
+        print(shape_in[1])
+        print(nlev)
+        raise ValueError('Either ''inData'' has an inconsistent level ' +
+                         'dimension, or the order (ntim, nlev, nlat, nlon) ' +
+                         'is wrong.')
+
+    ######
+    # Here is where the big changes from the non-ds oriented code need to
+    #  start
+    ######
+
+    # Subset dsIn to variables of interest
+    # dsInSubset = xr.Dataset({regridVar: dsIn[regridVar]
+    #                          for regridVar in regridVars})
+    # Pull just values for dsIn to speed up processing
+    dictIn = {regridVar: dsIn[regridVar].values
+              for regridVar in regridVars}
+
+    # Determinenumber of points (columns*time) to regrid
+    npts = int(np.prod(shape_in)/nlev)
+
+    for regridVar in regridVars:
+        # Reorder dimensions so level is the first dimension
+        #   (move time to end)
+        dictIn[regridVar] = np.rollaxis(dictIn[regridVar], 0, 4)
+        # dsInSubset = dsInSubset.transpose('lev', 'lat', 'lon', 'time')
+
+        # Reshape to be number of levels x (lat*lon*time)
+        dictIn[regridVar] = dictIn[regridVar].reshape([shape_in[1], npts])
+        # dsInSubset = dsInSubset.stack(pos=['lat', 'lon', 'time'])
+
+    # Reshape surface pressure field to match reshaped inData
+    # ps = np.rollaxis(ps, 0, 3)
+    # ps = ps.reshape([1, ps.size])
+    psDa = dsIn[psVar].transpose('lat', 'lon', 'time')
+    psDa = psDa.stack(pos=['lat', 'lon', 'time'])
+    # psData = psDa.values.reshape([1, psDa.size])
+    # Resphape psDa to a row vector in order to facilite dot mult. later on
+    psDa = psDa.expand_dims('new', axis=0)
+
+    #  Check for size consistency between inData and ps
+    if psDa.shape[1] != dictIn[regridVars[0]].shape[1]:
+        # if psDa.shape[1] != dsInSubset[regridVars[0]].shape[1]:
+        raise ValueError('dsInSubset and psDa have inconsistent ' +
+                         'dimensions')
+        return
+
+    #  Now that ps is 2D, make sure units are in Pa
+    if np.round(np.log10(np.mean(np.mean(psDa)))) <= 3:
+        psDa = psDa*100
+
+    #  Now, do interpolation
+
+    # Create dictionary of arrays to hold regridded output
+    # outData = np.empty([nlev2, int(np.prod(shape_in)/shape_in[1])])
+    dictOut = {regridVar: np.empty([nlev2,
+                                    int(np.prod(shape_in)/shape_in[1])])
+               for regridVar in regridVars}
+
+    # Get size of hyam, hybm
+    nHyam = hyam.size
+    nHybm = nHyam  # Assume coeff. arays are same size
+
+    # Generate matrix of pressure levels for each hybrid level
+    #   using matrix multiplication (similar to repmat)
+    plevs = (np.dot(hyam.reshape([nHyam, 1]), np.ones_like(psDa))*P0 +
+             np.dot(hybm.reshape([nHybm, 1]), psDa))
+
+    # Convert from interface pressures to box center pressures if needed. Use
+    #   linear interpolation between interface (aka: use mean of interfaces
+    #   as pressure for box center.)
+    if interface_flag:
+        plevs = (plevs[1:, :] + plevs[:-1, :])/2.
+
+    # Loop through each new level to which data is to be interpolated
+    for jNlev2 in range(nlev2):
+        if verbose_flag:
+            print('Computing values for {:0.0f}'.format(newlevs[jNlev2]/100.) +
+                  ' hPa')
+        for jNPts in range(npts):
+            # if np.floor(jNPts/100000.) == jNPts/100000:
+            #     print('{:0.0f}k of {:0.1f}k'.format(jNPts/1000, npts/1000))
+
+            # Find the index of the level just below that to be interpolated
+            xup = np.sum(plevs[:, jNPts] < newlevs[jNlev2]) - 1
+
+            # linearly interpolate to new pressure level for each column
+            # Xnew = X0 + (ln(Pnew) - ln(P0)) * (X1 - X0) / (ln(P1) - ln(P0))
+            if xup < (nlev-1):
+                # Loop through variables to be regridded
+                # May be able to drop this loop by stacking all variables
+                #   together somehow.
+                for regridVar in regridVars:
+                    dictOut[regridVar][jNlev2, jNPts] = \
+                        (dictIn[regridVar][xup, jNPts] +
+                         (np.log(newlevs[jNlev2]) -
+                          np.log(plevs[xup, jNPts])) *
+                         (dictIn[regridVar][xup + 1, jNPts] -
+                          dictIn[regridVar][xup, jNPts]) /
+                         (np.log(plevs[xup + 1, jNPts]) -
+                          np.log(plevs[xup, jNPts])
+                          )
+                         )
+
+    ###
+    # Construct output dataset
+    ###
+
+    for regridVar in regridVars:
+        # Reshape back to [height, lat, lon, time]
+        # outData = outData.reshape([nlev2, shape_in[2],
+        #                            shape_in[3], shape_in[0]])
+        dictOut[regridVar] = dictOut[regridVar].reshape([nlev2,
+                                                         shape_in[2],
+                                                         shape_in[3],
+                                                         shape_in[0]])
+
+        # Reorder dimensions back to [time, height, lat, lon]
+        # outData = np.rollaxis(outData, 3, 0)
+        dictOut[regridVar] = np.rollaxis(dictOut[regridVar], 3, 0)
+
+        # Convert regriddedData (np.array) to xr.DataArray
+        daOut = xr.DataArray(
+            dictOut[regridVar],
+            coords=[dsIn['time'],
+                    newlevs/100.,  # Convert Pa to hPa
+                    dsIn['lat'],
+                    dsIn['lon']],
+            dims=['time', 'plev', 'lat', 'lon'],
+            name=regridVar,
+            )
+
+        # Set attributes for regridded variable
+        daOut.attrs['long_name'] = dsIn[regridVar].long_name
+        daOut.attrs['units'] = dsIn[regridVar].units
+        # Assign id for QC purposes if possible
+        if 'id' in dsIn.attrs:
+            daOut.attrs['id'] = dsIn.id
+
+        # Set atributes for plev coordinate
+        daOut['plev'].attrs['long_name'] = 'pressure level'
+        daOut['plev'].attrs['units'] = 'hPa'
+
+        if regridVar == regridVars[0]:
+            dsOut = daOut.to_dataset(name=regridVar)
+            dsOut.attrs['id'] = dsIn.id
+        else:
+            dsOut = xr.merge(
+                [dsOut,
+                 daOut.to_dataset(name=regridVar)])
+            dsOut.attrs['id'] = dsIn.id
+    print(dsOut.data_vars)
+    # Return data interpolated to defined pressure levels
+    # return outData
+    # return dictOut
+    return dsOut
+
+
 def convertsigmatopres_mp(inTuple):
     """
     Wrapper for multiprocessing of convertsigmatopres
@@ -1856,6 +2217,7 @@ def convertunit(inData, inUnit, outUnit,
                             ('W/m2', 'm/s'): 1./rhow/lv,
                             ('mg/m2/s', 'mm/d'): sperd*mmperm/rhow/mgperkg,
                             ('Pa', 'hPa'): 1./paperhpa,
+                            ('Pa s**-1', 'Pa/s'): 1,
                             ('dyne/centimeter^2', 'N/m2'): (cmperm**2 *
                                                             1/dynepern),
                             ('dyne/centimeter^2', 'N m$^-2$'): (cmperm**2 *
@@ -1924,6 +2286,12 @@ def gethybsigcoeff(modelid='cesm', coordFile=None):
     #    server
     if coordFile is None:
         if gethostname() in ['stable', 'challenger', 'p', 'fog']:
+            if modelid.lower() == 'cesm':
+                coordFile = ('/home/disk/p/woelfle/cesm/nobackup/hist/' +
+                             'cesm122.hybsigcoeffs.nc')
+            else:
+                raise ValueError('Cannot find hybrid sigma coeffs for ' +
+                                 modelid)
             coordFile = ('/home/disk/p/woelfle/MATLAB/common/' + modelid +
                          '.hybsigcoeffs.nc')
         elif gethostname() == 'woelfle-laptop':
@@ -2386,12 +2754,15 @@ def getstandardunits(varName):
     Get standard units for a given variable
     """
     try:
-        stdUnits = {'FLDS': 'W/m2',
+        stdUnits = {'CLDTOT': 'fraction',
+                    'FLDS': 'W/m2',
                     'FLNS': 'W/m2',
                     'FSDS': 'W/m2',
                     'FSNS': 'W/m2',
                     'LHFLX': 'W/m2',
                     'msl': 'hPa',
+                    'OMEGA': 'Pa/s',
+                    'PBLH': 'm',
                     'PRECC': 'mm/d',
                     'PRECL': 'mm/d',
                     'PRECT': 'mm/d',
@@ -2403,18 +2774,26 @@ def getstandardunits(varName):
                     'sst': 'K',
                     'TAUX': 'N/m2',
                     'TAUY': 'N/m2',
+                    'TGCLDCWP': 'kg/m2',
+                    'TMQ': 'kg/m2',
                     'TREFHT': 'K',
                     'TS': 'K',
                     'U': 'm/s',
+                    'UTEND_CLUBB': 'm/s /s',
                     'U10': 'm/s',
                     'Z3': 'm',
                     'u': 'm/s',
                     'V': 'm/s',
+                    'VTEND_CLUBB': 'm/s /s',
                     'v': 'm/s',
+                    'w': 'Pa/s',
                     }[varName]
     except KeyError:
         raise KeyError('Cannot find standard units for ' + varName)
 
+    if varName == 'w':
+        print('Using {:s} for standard units for w. '.format(stdUnits) +
+              'Double check this.')
     return stdUnits
 
 
@@ -2861,11 +3240,11 @@ def loaderai(daNewGrid=None,
     # Add id to dataset
     eraiDs.attrs['id'] = 'ERAI'
 
-    # Regrid if requested
+    # Regrid if requested. Otherwise, return values here.
     if regrid_flag:
-        print('Cannot regrid yet')
-        eraiDsRG = eraiDs
-        return eraiDsRG
+        raise NotImplementedError('Cannot regrid with ds yet. Coming soon.')
+        # eraiDsRG = eraiDs
+        # return eraiDsRG
     else:
         return eraiDs
 
@@ -2878,8 +3257,16 @@ def loaderai(daNewGrid=None,
                      }
 
     # Initialize dictionaries to hold CORE variables
+
     erai = dict()
     eraiDir = '/home/disk/eos9/woelfle/dataset/ERAI/singlevar/'
+    # Define variable to suppress warnings in spyder
+    loadVars = 'broked'
+    yr1 = 'also broked'
+    tMax = 'more broked'
+    newlat = 'broked too'
+    newlon = 'alas, this too is broked'
+    print(loadVars)
     eraiVars = [cesm2eraiDict[j] for j in loadVars]
 
     # Construct full history file paths and load output from netcdfs
@@ -3904,7 +4291,7 @@ def roughregrid(daIn,
         Very rough right now. Need to make better.
     """
 
-    valuesIn = daIn.values
+    valuesIn = daIn.values.copy()
 
     # Retrieve new grid from file if not provided
     if any([newLat is None, newLon is None]):

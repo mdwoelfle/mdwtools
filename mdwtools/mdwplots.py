@@ -936,6 +936,7 @@ def getcmap(plotVar,
                     'FSNS': 'Reds',
                     'LHFLX': 'Blues',
                     'MGx': 'RdBu_r',
+                    'OMEGA': 'RdBu_r',
                     'OMEGA500': 'RdBu_r',
                     'OMEGA850': 'RdBu_r',
                     'PRECC': 'Purples',
@@ -958,6 +959,7 @@ def getcmap(plotVar,
                     'precip': 'Purples',
                     'sst': 'Reds',
                     'sverdrupx': 'RdBu_r',
+                    'w': 'RdBu_r',
                     }[plotVar]
         except KeyError:
             cMap = 'Greys'
@@ -1059,13 +1061,13 @@ def getlonlimstring(lonLim,
                            for j in range(len(lonLim))])
         if all(lonLim < 0) and (lonLim[-1] > lonLim[0]):
             lonLim = lonLim[::-1]
-        lonLimStr = ['{:2.0f}'.format(np.abs(lonLim[x])) +
-                     'W'*int(lonLim[x] < 0) +
+        lonLimStr = ['{:02.0f}'.format(np.abs(lonLim[x])) +
+                     'W'*int(lonLim[x] <= 0) +
                      'E'*int(lonLim[x] > 0)
                      for x in range(len(lonLim))]
     elif lonFormat == 'E':
-        lonLimStr = ['{:2.0f}'.format(np.abs(lonLim[x])) +
-                     'W'*int(lonLim[x] < 0) +
+        lonLimStr = ['{:02.0f}'.format(np.abs(lonLim[x])) +
+                     'W'*int(lonLim[x] <= 0) +
                      'E'*int(lonLim[x] > 0)
                      for x in range(len(lonLim))]
 
@@ -1204,7 +1206,7 @@ def getplotvarstring(varName):
                     'dOHCZ': (r'$\frac{\mathregular{d}}{\mathregular{dt}}' +
                               r'\mathregular{OHC_{100}}$'),
                     'DIA_IMPVF_TEMP': 'Diabatic\nmixing',
-                    'FLNS': r'$F_{LW,sfc}',
+                    'FLNS': r'$F_{LW,sfc}$',
                     'FNS': r'$F_{net,sfc}$',
                     'FSNS': r'$F_{SW,sfc}$',
                     'HDIFT3D': r'Horiz. Diff.',

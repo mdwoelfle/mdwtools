@@ -1499,6 +1499,62 @@ def calcdsprecipasymindex(ds,
     return paiDa
 
 
+def calcdsprecipcentroid(ds,
+                         indexType='areaweight',
+                         precipVar='PRECT',
+                         qc_flag=False,
+                         ):
+    """
+    Compute precipitation centroid for tropics ()
+
+    """
+    if indexType in ['areaweight']:
+        # Compute zonal mean of precipitation
+        zonMeanDa = calcdaregzonmean(ds[precipVar],
+                                     gwDa=(ds['gw']
+                                           if 'gw' in ds
+                                           else None),
+                                     latLim=np.array([-90, 90]),
+                                     lonLim=np.array([0, 360]),
+                                     ocnOnly_flag=False,
+                                     qc_flag=qc_flag,
+                                     stdUnits_flag=True,
+                                     )
+
+        # Compute area weighting term
+        re = getplanetradius('Earth')
+        Aw = re*np.cos(np.deg2rad(ds['lat']))
+
+        # Compute latitude weighted centroid
+        # sum(Area weight * Precipitation rate * Latitude) /
+        #   sum(Area weight * Precipitation rate)
+        if ds['lat'][1] > ds['lat'][0]:  # lats increasing
+            centDa = ((Aw[np.abs(ds['lat']) < 20] *
+                       zonMeanDa.sel(lat=slice(-20, 20)) *
+                       ds['lat'].sel(lat=slice(-20, 20))).sum(dim='lat') /
+                      (Aw[np.abs(ds['lat']) < 20] *
+                       zonMeanDa.sel(lat=slice(-20, 20))).sum(dim='lat')
+                      )
+        else:  # lats decreasing
+            centDa = ((Aw[np.abs(ds['lat']) < 20] *
+                       zonMeanDa.sel(lat=slice(20, -20)) *
+                       ds['lat'].sel(lat=slice(20, -20))).sum(dim='lat') /
+                      (Aw[np.abs(ds['lat']) < 20] *
+                       zonMeanDa.sel(lat=slice(20, -20))).sum(dim='lat')
+                      )
+
+        # Set attributes for centroid data array
+        centDa.attrs['name'] = 'P_cent'
+        centDa.attrs['long_name'] = 'Precipitation centroid'
+        centDa.attrs['method'] = 'Area weighting'
+        centDa.attrs['units'] = 'deg. N'
+
+    elif indexType == 'Lintneretal2004':
+        raise NotImplementedError('Don''t have code to do this yet.')
+
+    return centDa
+
+
 def calcdswalkerindex(ds,
                       indexType='DiNezioetal2013',
                       ocnOnly_flag=False,
@@ -1827,20 +1883,20 @@ def convertsigmatopres(inData,
         if verbose_flag:
             print('Computing values for {:0.0f}'.format(newlevs[jNlev2]/100.) +
                   ' hPa')
-        for jNPts in range(npts):
+        for jPt in range(npts):
 
             # Find the index of the level just below that to be interpolated
-            xup = np.sum(plevs[:, jNPts] < newlevs[jNlev2]) - 1
+            xup = np.sum(plevs[:, jPt] < newlevs[jNlev2]) - 1
 
             # linearly interpolate to new pressure level for each column
             # Xnew = X0 + (ln(Pnew) - ln(P0)) * (X1 - X0) / (ln(P1) - ln(P0))
             if xup < (nlev-1):
-                outData[jNlev2, jNPts] = \
-                    (inData[xup, jNPts] +
-                     (np.log(newlevs[jNlev2]) - np.log(plevs[xup, jNPts])) *
-                     (inData[xup + 1, jNPts] - inData[xup, jNPts]) /
-                     (np.log(plevs[xup + 1, jNPts]) -
-                      np.log(plevs[xup, jNPts])
+                outData[jNlev2, jPt] = \
+                    (inData[xup, jPt] +
+                     (np.log(newlevs[jNlev2]) - np.log(plevs[xup, jPt])) *
+                     (inData[xup + 1, jPt] - inData[xup, jPt]) /
+                     (np.log(plevs[xup + 1, jPt]) -
+                      np.log(plevs[xup, jPt])
                       )
                      )
 
@@ -2062,30 +2118,42 @@ def convertsigmatopresds(dsIn,
         if verbose_flag:
             print('Computing values for {:0.0f}'.format(newlevs[jNlev2]/100.) +
                   ' hPa')
-        for jNPts in range(npts):
-            # if np.floor(jNPts/100000.) == jNPts/100000:
-            #     print('{:0.0f}k of {:0.1f}k'.format(jNPts/1000, npts/1000))
+        for jPt in range(npts):
+            # if np.floor(jPt/100000.) == jPt/100000:
+            #     print('{:0.0f}k of {:0.1f}k'.format(jPt/1000, npts/1000))
 
-            # Find the index of the level just below that to be interpolated
-            xup = np.sum(plevs[:, jNPts] < newlevs[jNlev2]) - 1
+            # Find the index of the level just above that to be interpolated
+            xup = np.sum(plevs[:, jPt] < newlevs[jNlev2]) - 1
 
-            # linearly interpolate to new pressure level for each column
-            # Xnew = X0 + (ln(Pnew) - ln(P0)) * (X1 - X0) / (ln(P1) - ln(P0))
-            if xup < (nlev-1):
+            # If requested new level is not below lowest model level,
+            #   interpolate to the new level
+            if all([xup < (nlev-1), xup > 0]):
                 # Loop through variables to be regridded
                 # May be able to drop this loop by stacking all variables
                 #   together somehow.
                 for regridVar in regridVars:
-                    dictOut[regridVar][jNlev2, jNPts] = \
-                        (dictIn[regridVar][xup, jNPts] +
+                    # linearly interpolate to new pressure level for each
+                    #   column
+                    # Xnew = (X0 + (ln(Pnew) - ln(P0)) *
+                    #         (X1 - X0) / (ln(P1) - ln(P0)))
+                    dictOut[regridVar][jNlev2, jPt] = \
+                        (dictIn[regridVar][xup, jPt] +
                          (np.log(newlevs[jNlev2]) -
-                          np.log(plevs[xup, jNPts])) *
-                         (dictIn[regridVar][xup + 1, jNPts] -
-                          dictIn[regridVar][xup, jNPts]) /
-                         (np.log(plevs[xup + 1, jNPts]) -
-                          np.log(plevs[xup, jNPts])
+                          np.log(plevs[xup, jPt])) *
+                         (dictIn[regridVar][xup + 1, jPt] -
+                          dictIn[regridVar][xup, jPt]) /
+                         (np.log(plevs[xup + 1, jPt]) -
+                          np.log(plevs[xup, jPt])
                           )
                          )
+            # If requested value is below lowest modeled level, set to nan
+            else:
+                for regridVar in regridVars:
+                    dictOut[regridVar][jNlev2, jPt] = np.nan
+                # raise ValueError(
+                #     'newlev = {:0.0f};'.format(newlevs[jNlev2]) +
+                #     ' model surface = {:0.0f}'.format(plevs[-1, jPt])
+                #     )
 
     ###
     # Construct output dataset
@@ -2134,7 +2202,10 @@ def convertsigmatopresds(dsIn,
                 [dsOut,
                  daOut.to_dataset(name=regridVar)])
             dsOut.attrs['id'] = dsIn.id
-    print(dsOut.data_vars)
+
+    if verbose_flag:
+        print(dsOut.data_vars)
+
     # Return data interpolated to defined pressure levels
     # return outData
     # return dictOut
@@ -2754,7 +2825,11 @@ def getstandardunits(varName):
     Get standard units for a given variable
     """
     try:
-        stdUnits = {'CLDTOT': 'fraction',
+        stdUnits = {'CLDHGH': 'fraction',
+                    'CLDLOW': 'fraction',
+                    'CLDMED': 'fraction',
+                    'CLDTOT': 'fraction',
+                    'CLOUD': 'fraction',
                     'FLDS': 'W/m2',
                     'FLNS': 'W/m2',
                     'FSDS': 'W/m2',
@@ -2769,9 +2844,11 @@ def getstandardunits(varName):
                     'precip': 'mm/d',
                     'PS': 'hPa',
                     'PSL': 'hPa',
+                    'RELHUM': 'percent',
                     'SHFLX': 'W/m2',
                     'sp': 'hPa',
                     'sst': 'K',
+                    'T': 'K',
                     'TAUX': 'N/m2',
                     'TAUY': 'N/m2',
                     'TGCLDCWP': 'kg/m2',
@@ -4469,3 +4546,28 @@ def strisint(inString):
         return True
     except ValueError:
         return False
+
+
+def sublist(ls1, ls2):
+    """
+    Returns True if ls2 is a sublist of ls1
+    Copied from: https://stackoverflow.com/a/35964184
+    >>> sublist([], [1,2,3])
+    True
+    >>> sublist([1,2,3,4], [2,5,3])
+    True
+    >>> sublist([1,2,3,4], [0,3,2])
+    False
+    >>> sublist([1,2,3,4], [1,2,5,6,7,8,5,76,4,3])
+    False
+    """
+    def get_all_in(one, another):
+        for element in one:
+            if element in another:
+                yield element
+
+    for x1, x2 in zip(get_all_in(ls1, ls2), get_all_in(ls2, ls1)):
+        if x1 != x2:
+            return False
+
+    return True

@@ -2196,12 +2196,18 @@ def convertsigmatopresds(dsIn,
 
         if regridVar == regridVars[0]:
             dsOut = daOut.to_dataset(name=regridVar)
-            dsOut.attrs['id'] = dsIn.id
+            try:
+                dsOut.attrs['id'] = dsIn.id
+            except AttributeError:
+                pass
         else:
             dsOut = xr.merge(
                 [dsOut,
                  daOut.to_dataset(name=regridVar)])
-            dsOut.attrs['id'] = dsIn.id
+            try:
+                dsOut.attrs['id'] = dsIn.id
+            except AttributeError:
+                pass
 
     if verbose_flag:
         print(dsOut.data_vars)

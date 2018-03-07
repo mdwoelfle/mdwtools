@@ -14,6 +14,7 @@ import os                        # import operating system functions
 from scipy import interpolate    # interpolation functions
 import mdwtools.gpcploader as gpcploader  # load functions for loading gpcp
 import matplotlib.pyplot as plt  # for plotting
+import metpy.calc as mcalc  # for vertical regridding
 import xarray as xr              # For managing data
 
 """
@@ -1942,12 +1943,9 @@ def convertsigmatopresds(dsIn,
 
     Author:
         Matthew Woelfle (mdwoelfle@gmail.com)
-        (adapted from MATLAB code written by Dan Vimont:
-            http://www.aos.wisc.edu/~dvimont/matlab/
-         through several levels of abstraction)
 
     Version Date:
-        2018-01-23
+        2018-03-06
 
     Args:
         in - xrray dataset containing variables to be regridded
@@ -1975,10 +1973,12 @@ def convertsigmatopresds(dsIn,
 
     Notes:
         2017-11-07: Made function python3 compatible
-        2017-01-24: Updated to regrid all variables of interested in a dataset
+        2018-01-24: Updated to regrid all variables of interested in a dataset
                         with one function call. Now significantly faster when
                         converting multiple variables at once. 3% slower for a
                         single variable.
+        2018-03-06: Updated to use MetPy for vertically reinterpolating.
+                        Results in a >10x speedup of code.
     """
     if verbose_flag:
         print(regridVars)
@@ -1990,7 +1990,7 @@ def convertsigmatopresds(dsIn,
         print(newlevs[0])
 
     # True if coefficients are for interfaces not box centers
-    interface_flag = False
+    # interface_flag = False
 
     # Get model level coefficients
     if hCoeffs is None:
@@ -2009,172 +2009,35 @@ def convertsigmatopresds(dsIn,
         except KeyError:
             raise KeyError('Can''t find P0 in dictionary')
 
-    # Get number of old levels
-    nlev = hyam.size
-    # Get new levels as a vector
-    newlevs = newlevs[:]
-    # Get number of new levels
-    nlev2 = newlevs.size
+    # Get dimension lengths for unregridded fields
+    #   Assumed to be time, lev, lat, lon
+    ntime, nlev, nlat, nlon = dsIn[regridVars[0]].shape
 
-    # Get number of dims for surface pressure field
-    dims_ps = np.ndim(dsIn[psVar].data)
-    # Get number of dims for field to be regridded
-    dims_in = np.ndim(dsIn[regridVars[0]].data)
-    # Get shape of field to be regridded
-    # ASSUMES ALL FIELDS ARE THE SAME SHAPE!!
-    shape_in = dsIn[regridVars[0]].data.shape
+    # Get pressure level at each lev point using:
+    #   plev = p0*hyam + ps*hybm
+    a = (P0*np.reshape(hyam, [1, nlev, 1, 1]) *
+         np.ones([ntime, nlev, nlat, nlon]))
+    b = (np.reshape(hybm, [1, nlev, 1, 1]) *
+         np.reshape(dsIn[psVar].values.copy(), [ntime, 1, nlat, nlon]))
+    plev = a + b
 
-    # Ensure data to be regridded has one extra dimension compared to surface
-    #   pressure. This is presumed to be height (vertical dimension).
-    if dims_ps != (dims_in - 1):
-        raise ValueError('Variable ''inData'' should have one more dimension' +
-                         ' than ''ps''.')
-
-    # Automatically detect if dealing with interfaces by checking size of
-    #   field to be regridded against number of levels. update nlev as needed
-    if shape_in[1] == (nlev - 1):
-        interface_flag = True
-        nlevi = nlev
-        nlev = nlevi - 1
-    # If not interfaces, ensure field to be regridded has the proper number of
-    #   vertical levels
-    elif shape_in[1] != nlev:
-        print(shape_in[1])
-        print(nlev)
-        raise ValueError('Either ''inData'' has an inconsistent level ' +
-                         'dimension, or the order (ntim, nlev, nlat, nlon) ' +
-                         'is wrong.')
-
-    ######
-    # Here is where the big changes from the non-ds oriented code need to
-    #  start
-    ######
-
-    # Subset dsIn to variables of interest
-    # dsInSubset = xr.Dataset({regridVar: dsIn[regridVar]
-    #                          for regridVar in regridVars})
-    # Pull just values for dsIn to speed up processing
-    dictIn = {regridVar: dsIn[regridVar].values
-              for regridVar in regridVars}
-
-    # Determinenumber of points (columns*time) to regrid
-    npts = int(np.prod(shape_in)/nlev)
-
-    for regridVar in regridVars:
-        # Reorder dimensions so level is the first dimension
-        #   (move time to end)
-        dictIn[regridVar] = np.rollaxis(dictIn[regridVar], 0, 4)
-        # dsInSubset = dsInSubset.transpose('lev', 'lat', 'lon', 'time')
-
-        # Reshape to be number of levels x (lat*lon*time)
-        dictIn[regridVar] = dictIn[regridVar].reshape([shape_in[1], npts])
-        # dsInSubset = dsInSubset.stack(pos=['lat', 'lon', 'time'])
-
-    # Reshape surface pressure field to match reshaped inData
-    # ps = np.rollaxis(ps, 0, 3)
-    # ps = ps.reshape([1, ps.size])
-    psDa = dsIn[psVar].transpose('lat', 'lon', 'time')
-    psDa = psDa.stack(pos=['lat', 'lon', 'time'])
-    # psData = psDa.values.reshape([1, psDa.size])
-    # Resphape psDa to a row vector in order to facilite dot mult. later on
-    psDa = psDa.expand_dims('new', axis=0)
-
-    #  Check for size consistency between inData and ps
-    if psDa.shape[1] != dictIn[regridVars[0]].shape[1]:
-        # if psDa.shape[1] != dsInSubset[regridVars[0]].shape[1]:
-        raise ValueError('dsInSubset and psDa have inconsistent ' +
-                         'dimensions')
-        return
-
-    #  Now that ps is 2D, make sure units are in Pa
-    if np.round(np.log10(np.mean(np.mean(psDa)))) <= 3:
-        psDa = psDa*100
-
-    #  Now, do interpolation
-
-    # Create dictionary of arrays to hold regridded output
-    # outData = np.empty([nlev2, int(np.prod(shape_in)/shape_in[1])])
-    dictOut = {regridVar: np.empty([nlev2,
-                                    int(np.prod(shape_in)/shape_in[1])])
-               for regridVar in regridVars}
-
-    # Get size of hyam, hybm
-    nHyam = hyam.size
-    nHybm = nHyam  # Assume coeff. arays are same size
-
-    # Generate matrix of pressure levels for each hybrid level
-    #   using matrix multiplication (similar to repmat)
-    plevs = (np.dot(hyam.reshape([nHyam, 1]), np.ones_like(psDa))*P0 +
-             np.dot(hybm.reshape([nHybm, 1]), psDa))
-
-    # Convert from interface pressures to box center pressures if needed. Use
-    #   linear interpolation between interface (aka: use mean of interfaces
-    #   as pressure for box center.)
-    if interface_flag:
-        plevs = (plevs[1:, :] + plevs[:-1, :])/2.
-
-    # Loop through each new level to which data is to be interpolated
-    for jNlev2 in range(nlev2):
-        if verbose_flag:
-            print('Computing values for {:0.0f}'.format(newlevs[jNlev2]/100.) +
-                  ' hPa')
-        for jPt in range(npts):
-            # if np.floor(jPt/100000.) == jPt/100000:
-            #     print('{:0.0f}k of {:0.1f}k'.format(jPt/1000, npts/1000))
-
-            # Find the index of the level just above that to be interpolated
-            xup = np.sum(plevs[:, jPt] < newlevs[jNlev2]) - 1
-
-            # If requested new level is not below lowest model level,
-            #   interpolate to the new level
-            if all([xup < (nlev-1), xup > 0]):
-                # Loop through variables to be regridded
-                # May be able to drop this loop by stacking all variables
-                #   together somehow.
-                for regridVar in regridVars:
-                    # linearly interpolate to new pressure level for each
-                    #   column
-                    # Xnew = (X0 + (ln(Pnew) - ln(P0)) *
-                    #         (X1 - X0) / (ln(P1) - ln(P0)))
-                    dictOut[regridVar][jNlev2, jPt] = \
-                        (dictIn[regridVar][xup, jPt] +
-                         (np.log(newlevs[jNlev2]) -
-                          np.log(plevs[xup, jPt])) *
-                         (dictIn[regridVar][xup + 1, jPt] -
-                          dictIn[regridVar][xup, jPt]) /
-                         (np.log(plevs[xup + 1, jPt]) -
-                          np.log(plevs[xup, jPt])
-                          )
-                         )
-            # If requested value is below lowest modeled level, set to nan
-            else:
-                for regridVar in regridVars:
-                    dictOut[regridVar][jNlev2, jPt] = np.nan
-                # raise ValueError(
-                #     'newlev = {:0.0f};'.format(newlevs[jNlev2]) +
-                #     ' model surface = {:0.0f}'.format(plevs[-1, jPt])
-                #     )
+    # Regrid using MetPy function
+    #   fill_value = np.nan for invalid values,
+    #    i.e. those outside the modeled domain
+    isobaric_levels = mcalc.log_interp(newlevs[:],
+                                       plev,
+                                       *[dsIn[regridVar].values.copy()
+                                         for regridVar in regridVars],
+                                       axis=1)
 
     ###
     # Construct output dataset
     ###
 
-    for regridVar in regridVars:
-        # Reshape back to [height, lat, lon, time]
-        # outData = outData.reshape([nlev2, shape_in[2],
-        #                            shape_in[3], shape_in[0]])
-        dictOut[regridVar] = dictOut[regridVar].reshape([nlev2,
-                                                         shape_in[2],
-                                                         shape_in[3],
-                                                         shape_in[0]])
-
-        # Reorder dimensions back to [time, height, lat, lon]
-        # outData = np.rollaxis(outData, 3, 0)
-        dictOut[regridVar] = np.rollaxis(dictOut[regridVar], 3, 0)
-
+    for jVar, regridVar in enumerate(regridVars):
         # Convert regriddedData (np.array) to xr.DataArray
         daOut = xr.DataArray(
-            dictOut[regridVar],
+            isobaric_levels[jVar],
             coords=[dsIn['time'],
                     newlevs/100.,  # Convert Pa to hPa
                     dsIn['lat'],

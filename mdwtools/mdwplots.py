@@ -939,6 +939,8 @@ def getcmap(plotVar,
                     'FLNS': 'Blues',
                     'FNS': 'RdBu_r',
                     'FSNS': 'Reds',
+                    'iews': 'RdBu_r',
+                    'inss': 'RdBu_r',
                     'LHFLX': 'Blues',
                     'MGx': 'RdBu_r',
                     'OMEGA': 'RdBu_r',
@@ -982,23 +984,29 @@ def getcmap(plotVar,
                     'FNS': 'RdBu',
                     'FSNS': 'RdBu_r',
                     'LHFLX': 'RdBu',
+                    'LWCF': 'RdBu',
                     'OMEGA500': 'RdBu_r',
                     'OMEGA850': 'RdBu_r',
+                    'PBLH': 'RdBu_r',
                     'PRECC': 'PuOr',  # 'RdBu',
                     'PRECL': 'PuOr',  # 'RdBu',
                     'PRECT': 'PuOr',  # 'RdBu',
                     'PS': 'RdBu_r',
                     'RELHUM': 'RdBu',
                     'SHFLX': 'RdBu',
+                    'SWCF': 'RdBu',
                     'T': 'RdBu_r',
                     'TAUX': 'RdBu_r',
                     'TAUY': 'RdBu_r',
+                    'TMQ': 'RdBu',
                     'TS': 'RdBu_r',
                     'curlTau': 'RdBu_r',
                     'curlTau_y': 'RdBu_r',
                     'divTau': 'RdBu_r',
                     'ekmanx': 'RdBu_r',
                     'ekmany': 'RdBu_r',
+                    'iews': 'RdBu_r',
+                    'inss': 'RdBu_r',
                     'r': 'RdBu',
                     'sverdrupx': 'RdBu_r',
                     'MGx': 'RdBu_r'
@@ -1628,7 +1636,9 @@ def plotmap(lon, lat, plotData,
             projection='cea',
             quiver_flag=False,
             quiverKey_flag=True,
-            quiverScale=0.4,
+            quiverLat=None,
+            quiverLon=None,
+            quiverScale=0.4, # Num. of data units per arrow len unit
             quiverUnits='inches',
             returnM_flag=False,
             resolution='l',
@@ -1675,7 +1685,7 @@ def plotmap(lon, lat, plotData,
     if np.ndim(lon) == 1 & np.ndim(lat) == 1:
         # Rearrange fields to repeat across lon edge
         pData = np.column_stack((plotData[:, :],
-                                 plotData[:, 1]))  # <- should this be 0?
+                                 plotData[:, 1]))  # <- should this be 0 or -1?
 
         if U is not None:
             U = np.column_stack((U[:, :],
@@ -1752,10 +1762,17 @@ def plotmap(lon, lat, plotData,
 
     # Plot vector field on top of map if requested
     if quiver_flag:
+        if quiverLat is None:
+            quiverLat = lat
+        if quiverLon is None:
+            quiverLon = lon
+            quiverLon = np.append(quiverLon[:],
+                                  quiverLon[-1]+quiverLon[1]-quiverLon[0])
+        quiverLonG, quiverLatG = np.meshgrid(quiverLon, quiverLat)
 
         # Rearrange fields to repeat across lon edge
-        q1 = m.quiver(lonG[::subSamp, ::subSamp],
-                      latG[::subSamp, ::subSamp],
+        q1 = m.quiver(quiverLonG[::subSamp, ::subSamp],
+                      quiverLatG[::subSamp, ::subSamp],
                       U[::subSamp, ::subSamp],
                       V[::subSamp, ::subSamp],
                       latlon=True,

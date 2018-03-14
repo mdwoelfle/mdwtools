@@ -1421,6 +1421,61 @@ def calcdsctindex(ds,
     return ctDa
 
 
+def calcdsddyindex(ds,
+                   indexType='epac',
+                   indexVar='TS',
+                   ):
+    """
+    Compute meridional gradient index for a given dataset and return as
+        dataArray
+    """
+
+    if indexType.lower() in ['epac']:
+        # Compute regional mean through time along equator
+        regMeanDa = calcdaregmean(ds[indexVar],
+                                  gwDa=(ds['gw']
+                                        if 'gw' in ds
+                                        else None),
+                                  latLim=np.array([0, 10]),
+                                  lonLim=np.array([210, 260]),
+                                  ocnOnly_flag=(True
+                                                if 'LANDFRAC' in ds
+                                                else False),
+                                  landFracDa=(ds['LANDFRAC']
+                                              if 'LANDFRAC' in ds
+                                              else None),
+                                  stdUnits_flag=True,
+                                  )
+
+        # Compute reference regional mean over greater tropical Pacific
+        refRegMeanDa = calcdaregmean(ds[indexVar],
+                                     gwDa=(ds['gw']
+                                           if 'gw' in ds
+                                           else None),
+                                     latLim=np.array([-10, 0]),
+                                     lonLim=np.array([210, 260]),
+                                     ocnOnly_flag=(True
+                                                   if 'LANDFRAC' in ds
+                                                   else False),
+                                     landFracDa=(ds['LANDFRAC']
+                                                 if 'LANDFRAC' in ds
+                                                 else None),
+                                     stdUnits_flag=True,
+                                     )
+
+        # Compute CTI
+        dsstdyDa = regMeanDa - refRegMeanDa
+
+        # Add back attributes to differenced dataarray
+        dsstdyDa.attrs['units'] = ds[indexVar].units
+        dsstdyDa.attrs['long_name'] = 'Meridional Gradient (E. Pac.)'
+    else:
+        raise ValueError('Unknown indexType, {:s}, '.format(indexType) +
+                         'for computing meridional T gradient')
+
+    return dsstdyDa
+
+
 def calcdsditczindex(ds,
                      indexType='Bellucci2010',
                      precipVar='PRECT',
@@ -1784,9 +1839,16 @@ def convertsigmatopres(inData,
         Note that for the above, singleton dimensions should be preserved.
 
     Notes:
+        2018-03-06: Code could be sped up considerably by using MetPy
+                        See conversigmatopresds for implementation.
+                        Not implemented here yet, as I don't  use this code
+                        anymore.
         2017-11-07: Made function python3 compatible
     """
-
+    raise PendingDeprecationWarning('Code could be much better optimized. ' +
+                                    'See notes at top of function for more ' +
+                                    'details.'
+                                    )
     # Make sure newlevs are in Pa by checking order of pressure values
     if np.round(np.log10(np.mean(newlevs[:]))) <= 3:
         newlevs = newlevs*100
@@ -1965,20 +2027,25 @@ def convertsigmatopresds(dsIn,
     Conventions are:
         1.  Assume ps is in Pa (we will convert this to hPa)
         2.  Assume newlev is in hPa
-        3.  [ntim, nlev, nlat, nlon] = size(in);
-        4.  [ntim, nlat, nlon] = size(ps);
-        5.  nlev2 = length(newlevs);
-        6.  [ntim, nlev2, nlat, nlon] = size(out);
+        3.  [ntime, nlev, nlat, nlon] = size(dsIn[regridVar[0])
+        4.  [ntime, nlat, nlon] = size(dsIn[psVar])
+        6.  [ntime, nlev2, nlat, nlon] = size(out);
         Note that for the above, singleton dimensions should be preserved.
 
+    General code flow is as follows
+        1. Get coefficient terms in same shape as variable to be regridded
+        2. Combine coefficient terms to get pressure levels at each x, y, z, t
+        3. Feel this into mcalc.log_interp to interpolate to new levels
+        4. Construct output dataset for regridded variables
+
     Notes:
-        2017-11-07: Made function python3 compatible
+        2018-03-06: Updated to use MetPy for vertically reinterpolating.
+                        Results in a >10x speedup of code.
         2018-01-24: Updated to regrid all variables of interested in a dataset
                         with one function call. Now significantly faster when
                         converting multiple variables at once. 3% slower for a
                         single variable.
-        2018-03-06: Updated to use MetPy for vertically reinterpolating.
-                        Results in a >10x speedup of code.
+        2017-11-07: Made function python3 compatible
     """
     if verbose_flag:
         print(regridVars)
@@ -2076,8 +2143,6 @@ def convertsigmatopresds(dsIn,
         print(dsOut.data_vars)
 
     # Return data interpolated to defined pressure levels
-    # return outData
-    # return dictOut
     return dsOut
 
 
@@ -2152,6 +2217,7 @@ def convertunit(inData, inUnit, outUnit,
                             ('m/s', 'mm/d'): mmperm*sperd,
                             ('m/s', 'W/m2'): rhow*lv,
                             ('m s**-1', 'm/s'): 1.,
+                            ('N m**-2', 'N/m2'): 1.,
                             ('W/m2', 'kg/m2/s'): 1./lv,
                             ('W/m2', 'mm/d'): mmperm*sperd/rhow/lv,
                             ('W/m2', 'm/s'): 1./rhow/lv,
@@ -2703,7 +2769,9 @@ def getstandardunits(varName):
                     'FLNS': 'W/m2',
                     'FSDS': 'W/m2',
                     'FSNS': 'W/m2',
+                    'iews': 'N/m2',
                     'LHFLX': 'W/m2',
+                    'LWCF': 'W/m2',
                     'msl': 'hPa',
                     'OMEGA': 'Pa/s',
                     'PBLH': 'm',
@@ -2717,6 +2785,7 @@ def getstandardunits(varName):
                     'SHFLX': 'W/m2',
                     'sp': 'hPa',
                     'sst': 'K',
+                    'SWCF': 'W/m2',
                     'T': 'K',
                     'TAUX': 'N/m2',
                     'TAUY': 'N/m2',

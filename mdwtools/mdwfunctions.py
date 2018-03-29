@@ -1016,6 +1016,70 @@ def calcensstd(cases,
     return cases
 
 
+def calcfnsda(ds,
+              fluxVars=None,
+              fluxVarSigns=None,
+              ):
+    """
+    Create FNS dataArray for ds
+
+    Args:
+        ds - xarray dataset of model output
+
+    Kwargs:
+        fluxVars - list of variables to be summed to net surface flux
+        fluxVarSigns - sign of variables to be used when summing (positive up)
+
+    Notes:
+        - For CESM:
+            FNS = LHFLX + SHFLX + FLNS - FSNS
+            (positive up)
+    """
+
+    if fluxVars is None:
+        # List variables to be summed into net surface flux
+        fluxVars = ['LHFLX', 'SHFLX', 'FSNS', 'FLNS']
+
+        if fluxVarSigns is None:
+            # Set sign for each variable (positive up)
+            fluxVarSigns = [1, 1, -1, 1]
+
+    elif fluxVarSigns is None:
+        # Raise exception as don't know what sign should be for provided
+        #   fluxVars
+        raise RuntimeError('Must provide fluxVarSigns if providing ' +
+                           'fluxVars as a kwarg.')
+
+    # Ensure PRECC and PRECL have the same units
+    if not all([ds[fluxVar].units == ds['LHFLX'].units
+                for fluxVar in fluxVars]):
+        raise Exception('Units for flux terms do not match')
+
+    # Compute net surface flux
+    for jVar, fluxVar in enumerate(fluxVars):
+        if jVar == 0:
+            fnsValues = ds[fluxVar].values * fluxVarSigns[jVar]
+        else:
+            fnsValues = (fnsValues +
+                         ds[fluxVar].values * fluxVarSigns[jVar]
+                         )
+
+    # Create dataArray to hold net surface flux output
+    fnsDa = xr.DataArray(fnsValues,
+                         attrs=ds['PRECC'].attrs,
+                         coords=ds[fluxVars[0]].coords,
+                         dims=ds[fluxVars[0]].dims,
+                         name='FNS'
+                         )
+
+    # Update attributes for FNS dataArray
+    fnsDa.attrs['long_name'] = 'Net surface heat flux (+ up)'
+    fnsDa.attrs['pos_dir'] = 'up'
+    fnsDa.attrs['units'] = ds[fluxVars[0]].units
+
+    return fnsDa
+
+
 def calcprectda(ds):
     """
     Create PRECT dataArray in ds
@@ -1499,6 +1563,75 @@ def calcdsditczindex(ds,
                          'for computing double-ITCZ index')
 
     return regMeanDa
+
+
+def calcdsfnsasymindex(ds,
+                       indexType='xiangetal2017',
+                       fnsVar='FNS',
+                       ocnOnly_flag=True,
+                       qc_flag=False,
+                       ):
+    """
+    Compute net surface flux asymmetry for a given dataset and return as data
+        array
+    """
+    if indexType.lower() in 'xiangetal2017':
+        latMax = 38
+
+        # Ensure land mask is available if needed
+        if all([ocnOnly_flag,
+                'LANDFRAC' not in ds.data_vars]):
+            raise ValueError('Need LANDFRAC to limit fnsAsym to ' +
+                             'ocean grid points only')
+
+        # Compute northern tropics mean precip rate
+        nhRegMeanDa = calcdaregmean(ds[fnsVar],
+                                    gwDa=(ds['gw']
+                                          if 'gw' in ds
+                                          else None),
+                                    latLim=np.array([0, latMax]),
+                                    lonLim=np.array([0, 360]),
+                                    ocnOnly_flag=ocnOnly_flag,
+                                    landFracDa=(ds['LANDFRAC']
+                                                if 'LANDFRAC' in ds
+                                                else None),
+                                    stdUnits_flag=True,
+                                    )
+
+        # Compute southern tropics mean precip rate
+        shRegMeanDa = calcdaregmean(ds[fnsVar],
+                                    gwDa=(ds['gw']
+                                          if 'gw' in ds
+                                          else None),
+                                    latLim=np.array([-latMax, 0]),
+                                    lonLim=np.array([0, 360]),
+                                    ocnOnly_flag=ocnOnly_flag,
+                                    landFracDa=(ds['LANDFRAC']
+                                                if 'LANDFRAC' in ds
+                                                else None),
+                                    stdUnits_flag=True,
+                                    )
+
+        # Compute net surface flux asymmetry
+        # fnsAsym = FNS(0-latMax N) - FNS(latMax S-0)
+        fnsAsymDa = (nhRegMeanDa - shRegMeanDa)
+
+        # Make plot for QC purposes
+        if qc_flag:
+            plt.figure()
+            plt.plot(nhRegMeanDa.values, label='NH')
+            plt.plot(shRegMeanDa.values, label='SH')
+            plt.legend()
+
+        # Update attributes on paiDa
+        fnsAsymDa.name = 'PAI'
+        fnsAsymDa.attrs['long_name'] = ('Net surface flux asymmetry ' +
+                                        '(|lat| < {:0.0f})'.format(latMax))
+        fnsAsymDa.attrs['units'] = None
+    else:
+        raise ValueError('Unknown indexType, {:s}, '.format(indexType) +
+                         'for computing net surface flux asymmetry.')
+    return fnsAsymDa
 
 
 def calcdsprecipasymindex(ds,
@@ -2767,6 +2900,7 @@ def getstandardunits(varName):
                     'CLOUD': 'fraction',
                     'FLDS': 'W/m2',
                     'FLNS': 'W/m2',
+                    'FNS': 'W/m2',
                     'FSDS': 'W/m2',
                     'FSNS': 'W/m2',
                     'iews': 'N/m2',

@@ -1051,7 +1051,7 @@ def calcfnsda(ds,
                            'fluxVars as a kwarg.')
 
     # Ensure PRECC and PRECL have the same units
-    if not all([ds[fluxVar].units == ds['LHFLX'].units
+    if not all([ds[fluxVar].units == ds[fluxVars[0]].units
                 for fluxVar in fluxVars]):
         raise Exception('Units for flux terms do not match')
 
@@ -1066,7 +1066,7 @@ def calcfnsda(ds,
 
     # Create dataArray to hold net surface flux output
     fnsDa = xr.DataArray(fnsValues,
-                         attrs=ds['PRECC'].attrs,
+                         attrs=ds[fluxVars[0]].attrs,
                          coords=ds[fluxVars[0]].coords,
                          dims=ds[fluxVars[0]].dims,
                          name='FNS'
@@ -1075,6 +1075,71 @@ def calcfnsda(ds,
     # Update attributes for FNS dataArray
     fnsDa.attrs['long_name'] = 'Net surface heat flux (+ up)'
     fnsDa.attrs['pos_dir'] = 'up'
+    fnsDa.attrs['units'] = ds[fluxVars[0]].units
+
+    return fnsDa
+
+
+def calcfntda(ds,
+              fluxVars=None,
+              fluxVarSigns=None,
+              ):
+    """
+    Create FNT dataArray for ds
+
+    Args:
+        ds - xarray dataset of model output
+
+    Kwargs:
+        fluxVars - list of variables to be summed to net top of model flux
+        fluxVarSigns - sign of variables to be used when summing
+            (positive down; positive = warm atmosphere)
+
+    Notes:
+        - For CESM:
+            FNT = FSNT - FLNT
+            (positive up)
+    """
+
+    if fluxVars is None:
+        # List variables to be summed into net surface flux
+        fluxVars = ['FSNT', 'FLNT']
+
+        if fluxVarSigns is None:
+            # Set sign for each variable (positive down)
+            fluxVarSigns = [1, -1]
+
+    elif fluxVarSigns is None:
+        # Raise exception as don't know what sign should be for provided
+        #   fluxVars
+        raise RuntimeError('Must provide fluxVarSigns if providing ' +
+                           'fluxVars as a kwarg.')
+
+    # Ensure PRECC and PRECL have the same units
+    if not all([ds[fluxVar].units == ds[fluxVars[0]].units
+                for fluxVar in fluxVars]):
+        raise Exception('Units for flux terms do not match')
+
+    # Compute net surface flux
+    for jVar, fluxVar in enumerate(fluxVars):
+        if jVar == 0:
+            fnsValues = ds[fluxVar].values * fluxVarSigns[jVar]
+        else:
+            fnsValues = (fnsValues +
+                         ds[fluxVar].values * fluxVarSigns[jVar]
+                         )
+
+    # Create dataArray to hold net surface flux output
+    fnsDa = xr.DataArray(fnsValues,
+                         attrs=ds[fluxVars[0]].attrs,
+                         coords=ds[fluxVars[0]].coords,
+                         dims=ds[fluxVars[0]].dims,
+                         name='FNS'
+                         )
+
+    # Update attributes for FNS dataArray
+    fnsDa.attrs['long_name'] = 'Net top of model heat flux (+ dn)'
+    fnsDa.attrs['pos_dir'] = 'down'
     fnsDa.attrs['units'] = ds[fluxVars[0]].units
 
     return fnsDa
@@ -2901,6 +2966,7 @@ def getstandardunits(varName):
                     'FLDS': 'W/m2',
                     'FLNS': 'W/m2',
                     'FNS': 'W/m2',
+                    'FNT': 'W/m2',
                     'FSDS': 'W/m2',
                     'FSNS': 'W/m2',
                     'iews': 'N/m2',

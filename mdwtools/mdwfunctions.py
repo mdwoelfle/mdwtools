@@ -14,7 +14,7 @@ import os                        # import operating system functions
 from scipy import interpolate    # interpolation functions
 import mdwtools.gpcploader as gpcploader  # load functions for loading gpcp
 import matplotlib.pyplot as plt  # for plotting
-import metpy.calc as mcalc  # for vertical regridding
+# import metpy.calc as mcalc  # for vertical regridding
 import xarray as xr              # For managing data
 
 """

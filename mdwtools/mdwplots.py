@@ -1638,7 +1638,7 @@ def plotmap(lon, lat, plotData,
             quiverKey_flag=True,
             quiverLat=None,
             quiverLon=None,
-            quiverScale=0.4, # Num. of data units per arrow len unit
+            quiverScale=0.4,  # Num. of data units per arrow len unit
             quiverUnits='inches',
             returnM_flag=False,
             resolution='l',

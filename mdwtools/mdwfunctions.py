@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Created on Wed Jun 24 14:41:41 2015
-Version Date: 2017-06-13
+Version Date: 2018-04-25
 
 @author: woelfle
 """
@@ -1611,7 +1611,14 @@ def calcdsditczindex(ds,
                      ):
     """
     Compute double-ITCZ index for a given dataset and return as data array
-   """
+
+    Available index types (indexType):
+        'Bellucci2010' - regional mean rain rate over SEP
+        'YuZhang2018_ia' - measure of E. Pac. ITCZ meridional asymmetry based
+            on mean rain rates; postive = more rainfall in NH
+        'YuZhang2018_id' - measure of how split the ITCZ is in the E. Pac.
+            based on mean rain rates; positive = more split, less on equator
+    """
 
     if indexType.lower() in ['bellucci2010', 'bellucci10']:
         regMeanDa = calcdaregmean(ds[precipVar],
@@ -1623,11 +1630,125 @@ def calcdsditczindex(ds,
                                   ocnOnly_flag=False,
                                   stdUnits_flag=True,
                                   )
+
+        regMeanDa.attrs['source'] = 'Bellucci2010'
+
+        # Return regional mean as double-ITCZ index
+        return regMeanDa
+
+    elif indexType[:-3].lower() in ['yuzhang2018', 'yuzhang18']:
+        raise NotImplementedError('I_a and I_d computations coming soon')
+        # Compute P_NEP
+        nepDa = calcdaregmean(ds[precipVar],
+                              gwDa=(ds['gw']
+                                    if 'gw' in ds
+                                    else None),
+                              latLim=np.array([2, 10]),
+                              lonLim=np.array([180, 275]),
+                              ocnOnly_flag=True,
+                              stdUnits_flag=True,
+                              )
+
+        # Compute P_SEP
+        sepDa = calcdaregmean(ds[precipVar],
+                              gwDa=(ds['gw']
+                                    if 'gw' in ds
+                                    else None),
+                              latLim=np.array([-10, -2]),
+                              lonLim=np.array([210, 275]),
+                              ocnOnly_flag=True,
+                              stdUnits_flag=True,
+                              )
+
+        # Compute P_EEP
+        eepDa = calcdaregmean(ds[precipVar],
+                              gwDa=(ds['gw']
+                                    if 'gw' in ds
+                                    else None),
+                              latLim=np.array([-2, 2]),
+                              lonLim=np.array([180, 275]),
+                              ocnOnly_flag=True,
+                              stdUnits_flag=True,
+                              )
+
+        if indexType[-2:].lower() == 'ia':
+            # Compute I_a = ((P_NEP - P_SEP) /
+            #                (1/3*(P_NEP + P_SEP + P_EEP)))
+            iaDa = ((nepDa - sepDa) /
+                    (1/3.*(nepDa + sepDa + eepDa))
+                    )
+
+            iaDa.name = r'I_a'
+            iaDa.attrs['long_name'] = 'ITCZ Asymmetry Index'
+            iaDa.attrs['source'] = 'YuZhang2018'
+            iaDa.attrs['units'] = None
+
+            return iaDa
+
+        elif indexType[-2:].lower() == 'id':
+            # Compute I_d = ((P_NEP - 2*P_EEP + P_SEP) /
+            #                (1/3*(P_NEP + P_SEP + P_EEP)))
+            idDa = ((nepDa - 2*eepDa + sepDa) /
+                    (1/3.*(nepDa + sepDa + eepDa))
+                    )
+
+            idDa.name = r'I_d'
+            idDa.attrs['long_name'] = 'double-ITCZ Index'
+            idDa.attrs['source'] = 'YuZhang2018'
+            idDa.attrs['units'] = None
+
+            return idDa
+
     else:
         raise ValueError('Unknown indexType, {:s}, '.format(indexType) +
                          'for computing double-ITCZ index')
 
-    return regMeanDa
+
+def calcdslonprecipcentroid(ds,
+                            indexType='areaweight',
+                            precipVar='PRECT',
+                            qc_flag=False,
+                            ):
+    """
+    Compute precipitation centroid at each longitude for tropics
+
+    """
+    if indexType in ['areaweight']:
+
+        # Compute area weighting term (using latitude weighting)
+        re = getplanetradius('Earth')
+        Aw = re * np.cos(np.deg2rad(ds['lat']))
+
+        # Compute latitude weighted centroid
+        # sum(Area weight * Precipitation rate * Latitude) /
+        #   sum(Area weight * Precipitation rate)
+        if ds['lat'][1] > ds['lat'][0]:  # if lats increasing
+            centDa = ((Aw[np.abs(ds['lat']) < 20] *
+                       ds[precipVar].sel(lat=slice(-20, 20)) *
+                       ds['lat'].sel(lat=slice(-20, 20))).sum(dim='lat') /
+                      (Aw[np.abs(ds['lat']) < 20] *
+                       ds[precipVar].sel(lat=slice(-20, 20))).sum(dim='lat')
+                      )
+        else:  # if lats decreasing
+            centDa = ((Aw[np.abs(ds['lat']) < 20] *
+                       ds[precipVar].sel(lat=slice(20, -20)) *
+                       ds['lat'].sel(lat=slice(20, -20))).sum(dim='lat') /
+                      (Aw[np.abs(ds['lat']) < 20] *
+                       ds[precipVar].sel(lat=slice(20, -20))).sum(dim='lat')
+                      )
+
+        # Set attributes for centroid data array
+        centDa.attrs['name'] = 'P_cent'
+        centDa.attrs['long_name'] = 'Precipitation centroid'
+        centDa.attrs['method'] = 'Area weighting'
+        centDa.attrs['units'] = 'deg. N'
+
+    elif indexType == 'Lintneretal2004':
+        raise NotImplementedError('Don''t have code to do this yet.')
+
+    # Return centroid as function of longitude data array
+    #   time x longitude x centroid latitude
+    return centDa
 
 
 def calcdsfnsasymindex(ds,

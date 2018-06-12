@@ -1780,7 +1780,7 @@ def plotmap(lon, lat, plotData,
                       units=quiverUnits,
                       scale=quiverScale)
         if quiverKey_flag:
-            plt.quiverkey(q1, 0.5, 1.05, Uref,
+            plt.quiverkey(q1, 0.4, 1.10, Uref,
                           Uname + ' (' +
                           '{:0.5f}'.format(Uref).rstrip('0').rstrip('.') +
                           ' ' +

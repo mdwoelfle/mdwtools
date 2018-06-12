@@ -14,7 +14,7 @@ import os                        # import operating system functions
 from scipy import interpolate    # interpolation functions
 import mdwtools.gpcploader as gpcploader  # load functions for loading gpcp
 import matplotlib.pyplot as plt  # for plotting
-# import metpy.calc as mcalc  # for vertical regridding
+import metpy.calc as mcalc  # for vertical regridding
 import xarray as xr              # For managing data
 
 """
@@ -2580,8 +2580,12 @@ def convertunit(inData, inUnit, outUnit,
                     print('No unit conversion performed')
                 return (inData, inUnit)
             else:
-                raise KeyError('Could not convert ' +
-                               inUnit + ' to ' + outUnit)
+                if outUnit == '':
+                    # Assumes standard unit was not found
+                    return inData, inUnit
+                else:
+                    raise KeyError('Could not convert ' +
+                                   inUnit + ' to ' + outUnit)
 
 
 def findlast(inString, subString):
@@ -3086,10 +3090,12 @@ def getstandardunits(varName):
                     'CLOUD': 'fraction',
                     'FLDS': 'W/m2',
                     'FLNS': 'W/m2',
+                    'FLNSC': 'W/m2',
                     'FNS': 'W/m2',
                     'FNT': 'W/m2',
                     'FSDS': 'W/m2',
                     'FSNS': 'W/m2',
+                    'FSNSC': 'W/m2',
                     'iews': 'N/m2',
                     'LHFLX': 'W/m2',
                     'LWCF': 'W/m2',
@@ -3125,7 +3131,9 @@ def getstandardunits(varName):
                     'w': 'Pa/s',
                     }[varName]
     except KeyError:
-        raise KeyError('Cannot find standard units for ' + varName)
+        print('Cannot find standard units for ' + varName)
+        stdUnits = None
+        # raise KeyError('Cannot find standard units for ' + varName)
 
     if varName == 'w':
         print('Using {:s} for standard units for w. '.format(stdUnits) +

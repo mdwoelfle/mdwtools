@@ -3091,6 +3091,7 @@ def getstandardunits(varName):
                     'FLDS': 'W/m2',
                     'FLNS': 'W/m2',
                     'FLNSC': 'W/m2',
+                    'FLUT': 'W/m2',
                     'FNS': 'W/m2',
                     'FNT': 'W/m2',
                     'FSDS': 'W/m2',

@@ -1,0 +1,8 @@
+# Python bytecode
+*.pyc
+
+# Text files (usually notes on python things)
+*.txt
+
+# Temporary folder for test files
+.ipynb_checkpoints/

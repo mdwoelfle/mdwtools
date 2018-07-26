@@ -1579,6 +1579,10 @@ def calcdsctindex(ds,
         raise ValueError('Unknown indexType, {:s}, '.format(indexType) +
                          'for computing cold tongue index')
 
+    # Set dataarray attributes
+    ctDa.attrs['units'] = ds[sstVar].units
+    ctDa.attrs['long_name'] = 'Cold Tongue Index'
+
     return ctDa
 
 
@@ -2137,6 +2141,9 @@ def calcdswalkerindex(ds,
     else:
         raise ValueError('Unknown indexType, {:s}, '.format(indexType) +
                          'for computing Walker index')
+
+    # Set data array attributes
+    walkerDa.attrs['units'] = ds[pressureVar].units
 
     return walkerDa
 
@@ -3299,9 +3306,9 @@ def getstandardunitstring(unitString,
         return prependValue + 'kg/m2/s'
     elif unitString in ['m/s', 'm s^-1']:
         return prependValue + 'm/s'
-    elif unitString in ['mm/d', 'mm d^-1', 'mm/day']:
+    elif unitString in ['mm/d', 'mm d^-1', 'mm/day', 'millimeters/day']:
         return prependValue + 'mm/d'
-    elif unitString in ['W/m2', 'W/m^2', 'W m^-2', 'watt/m^2']:
+    elif unitString in ['W/m2', 'W/m^2', 'W m^-2', 'watt/m^2', 'W m-2']:
         return prependValue + 'W/m2'
     elif unitString in ['mg/m2/s', 'mg m^-2 s^-1']:
         return prependValue + 'mg/m2/s'

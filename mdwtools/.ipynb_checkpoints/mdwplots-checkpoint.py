@@ -932,7 +932,7 @@ def getcmap(plotVar,
     if not diff_flag:
         try:
             cMap = {'CLDHGH': 'Greys_r',
-                    'CLDLOW': 'Greys_r',
+                    'CLDLOW': 'Blues',
                     'CLDMED': 'Greys_r',
                     'CLDTOT': 'Greys_r',
                     'CLOUD': 'Greys_r',
